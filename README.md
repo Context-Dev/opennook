@@ -1,17 +1,21 @@
 # OpenNook
 
-[![CI](https://github.com/athledev-labs/opennook/actions/workflows/ci.yml/badge.svg)](https://github.com/athledev-labs/opennook/actions/workflows/ci.yml)
+[![CI](https://github.com/twinkling-reality/opennook/actions/workflows/ci.yml/badge.svg)](https://github.com/twinkling-reality/opennook/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![License: MIT (NookSurface)](https://img.shields.io/badge/NookSurface-MIT-blue.svg)](LICENSE-MIT-NOOKSURFACE)
 [![Swift 5.9+](https://img.shields.io/badge/swift-5.9%2B-orange.svg)](https://swift.org)
 [![Platform: macOS 15+](https://img.shields.io/badge/platform-macOS%2015%2B-lightgrey.svg)](#requirements)
-[![Swift Package Index](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fathledev-labs%2Fopennook%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/athledev-labs/opennook)
-[![Swift Package Index](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Fathledev-labs%2Fopennook%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/athledev-labs/opennook)
+[![Swift Package Index](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Ftwinkling-reality%2Fopennook%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/twinkling-reality/opennook)
+[![Swift Package Index](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Ftwinkling-reality%2Fopennook%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/twinkling-reality/opennook)
 
 **An open-source framework for building macOS notch apps.**
 
 **Website:** [opennook.dev](https://opennook.dev) ·
 **Docs:** [Getting started](https://opennook.dev/start/introduction/)
+
+<p align="center">
+  <img src="docs/images/nook-hero.gif" width="840" alt="Four ShowcaseNook scenes, each opening from the collapsed notch pill into its expanded panel: a music player with its queue, a calendar beside today's schedule, a focus timer on a tick dial, and a release build going step by step">
+</p>
 
 OpenNook gives you the hard part for free: a polished window that lives in the
 menu-bar notch, expands and collapses on hover, paints a proper frosted
@@ -24,88 +28,137 @@ It is a **base layer plus a working demo** - not a finished product. The demo
 app is intentionally minimal: it shows the framework off and gives you a
 known-good starting point to fork.
 
-![OpenNook expanded on macOS](docs/images/nook-expanded.png)
-
-![File shelf via NookComponents](docs/images/nook-shelf.png)
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/nook-player.png" alt="ShowcaseNook player scene: cover art, track details and transport controls beside an Up Next queue, with a Living Room output companion below the panel">
+      <br><sub><b>Now playing.</b> Cover art drawn in code, the queue beside it, and where it plays in a companion below. <code>swift run ShowcaseNook --scene player</code></sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/nook-agenda.png" alt="ShowcaseNook agenda scene: a September month calendar beside today's schedule, with the current meeting highlighted">
+      <br><sub><b>Agenda.</b> This month beside today's schedule. <code>swift run ShowcaseNook --scene agenda</code></sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/images/nook-timer.png" alt="ShowcaseNook timer scene: a focus countdown on a tick dial with Pause and +5 min buttons, an orange rim glow, and session lengths in a companion below">
+      <br><sub><b>Focus timer.</b> A countdown on a tick dial, session lengths in a companion, the rim lit while it runs. <code>swift run ShowcaseNook --scene timer</code></sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/images/nook-progress.png" alt="ShowcaseNook progress scene: a release build with a segmented progress bar and a checklist of steps, a blue rim glow, and a Restart companion below">
+      <br><sub><b>Build progress.</b> A release build step by step, with a card when it finishes. <code>swift run ShowcaseNook --scene progress</code></sub>
+    </td>
+  </tr>
+</table>
 
 Collapsed, the nook is a compact pill in the menu-bar notch (customizable
-leading/trailing slots). Hover to expand on desktop, or press **⌥ Space** to
+leading/trailing slots). Hover to expand on desktop, or press **⌥⌘;** to
 toggle. Expanded, you get framework chrome (top bar, lock, settings) around
 the view you register. Layout follows the display: notch-fused on notched
 panels, floating capsule elsewhere (`NookPresentation`, overridable in
-Settings). The shelf above is from `Examples/ShelfNook` via optional
-`NookComponents`.
+Settings). The looks above are scenes from `Examples/ShowcaseNook`, recorded
+live from the running app; see [`docs/images/`](docs/images/README.md) for how they are made.
+
+<p align="center">
+  <img src="docs/images/nook-shelf.png" width="600" alt="ShowcaseNook shelf scene: five files with previews on the NookComponents file shelf, and a Show in Finder companion below">
+  <br><sub><b>File shelf.</b> Files dropped on the notch, from the optional <code>NookComponents</code>. <code>swift run ShowcaseNook --scene shelf</code></sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/nook-themes.gif" width="840" alt="The ShowcaseNook agenda scene re-themed live, cutting from the standard black chrome to Dusk (a violet gradient with a soft glow), Aurora (a green and indigo mesh with a mint accent) and Ember (a warm radial glow with serif type)">
+  <br><sub><b>Themes.</b> One running nook, re-themed from a JSON file on every save:
+  the standard look, then Dusk, Aurora and Ember from <code>Examples/Themes</code>.
+  <code>swift run ShowcaseNook --scene agenda --theme Examples/Themes/dusk.json</code></sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/nook-activities.gif" width="840" alt="The ShowcaseNook compact scene: a song holds the compact pill with a focus timer in a small capsule beside it, then the pill grows into a peek with the song's title, artist and progress, then the nook opens onto the song's player">
+  <br><sub><b>Live activities and peek.</b> Two activities share the pill, the song peeks
+  under the notch, and a click opens onto it.
+  <code>swift run ShowcaseNook --scene compact</code></sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/nook-shared.gif" width="840" alt="The ShowcaseNook compact scene opening onto the song: the small cover beside the notch grows into the large cover of the player as the nook expands, while the rest of the player fades in around it">
+  <br><sub><b>Shared elements.</b> The cover moves from the pill into the player instead of
+  fading out and in. <code>swift run ShowcaseNook --scene compact --open-activity</code></sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/nook-playground.gif" width="840" alt="PlaygroundNook: the controls window below the expanded nook, with the material changing and the nook following it live">
+  <br><sub><b>Playground.</b> Change the running nook from a controls window,
+  then copy the result as Swift or a JSON preset.
+  <code>swift run PlaygroundNook</code></sub>
+</p>
 
 ## What's inside
 
-OpenNook is two Swift modules, a thin demo app, and two ways to launch it.
+- **`NookSurface`** - the notch window itself: shape geometry, hover behavior,
+  the expand/compact lifecycle, the translucent backdrop, the shimmer overlay.
+  A trimmed, renamed fork of
+  [DynamicNotchKit](https://github.com/MrKai77/DynamicNotchKit), licensed MIT
+  (see [Licensing](#licensing)). You drive it through `NookKit`.
+- **`NookKit`** - the app chrome on top of it: lifecycle (`AppCoordinator`),
+  state (`AppState`), a dependency container (`AppServices`), persisted
+  appearance preferences, the top bar and Settings shell that host your
+  registered home view, the compact slots, and the global hotkey.
+- **`NookApp`** - the one-line entry point that wires the `NSApplication`, the
+  coordinator, the menu-bar fallback, and your view together.
+- **`NookComponents`** - opt-in add-ons, not pulled in by `NookApp`: a file
+  shelf, a priority live-activity queue, and an ambient volume glyph.
 
-### `NookSurface` - the notch window
-
-The low-level chrome: the notch-shaped panel itself, its shape geometry,
-hover behavior, expand/compact lifecycle, the translucent backdrop, and the
-shimmer feedback overlay. This is a trimmed, renamed fork of
-[DynamicNotchKit](https://github.com/MrKai77/DynamicNotchKit) and is licensed
-MIT (see [Licensing](#licensing)).
-
-You usually don't edit `NookSurface` - you drive it through `NookKit`.
-
-### `NookKit` - the app chrome
-
-Everything built on top of `NookSurface` to make it feel like an app:
-
-- `App/AppCoordinator.swift` - lifecycle (show / hide / toggle, keep-open,
-  reset settings); binds the notch backdrop to appearance preferences.
-- `App/AppState.swift` - `viewMode`, `appearancePreferences`, visibility
-  flags. Add your product state alongside these.
-- `App/AppServices.swift` - an empty dependency container. Add your services
-  (clipboard, networking, persistence...) here so view initializers stay put.
-- `App/NookAppearancePreferences.swift` - persisted theme / surface style /
-  haptics, with forwards-compatible `Codable` decoding.
-- `App/Views/NookExpandedView.swift` - the framework chrome shell (top bar +
-  Settings) that hosts the home view **you register** via `NookConfiguration`.
-- `App/Views/NookTopBar.swift` - home glyph + lock (keep-open) + gear.
-- `App/Views/Compact/CompactViews.swift` - the left/right slots flanking the
-  physical notch when collapsed.
-- `App/Views/Settings/` - Appearance, Display, Hotkey, and Data panels.
-- `App/Views/Shared/` - reusable settings primitives.
-- `System/HotkeyController.swift` - a Carbon-based global hotkey.
-
-### `NookComponents` - optional add-ons
-
-Opt-in components built on the layers above - depend on this product only when
-you want one. It is not pulled in by `NookApp`.
-
-- `Shelf/` - a file shelf: drop files onto the notch, they collect in a
-  persistent `ShelfStore`, and you can drag them back out. Render it with
-  `NookShelfView` and wire `ShelfStore.accept` into `NookConfiguration.onFileDrop`.
-  See `Examples/ShelfNook`.
-- `Activities/` - a priority live-activity queue: `NookActivityQueue` collects
-  transient activities, orders them by priority, coalesces duplicates, and
-  presents each by briefly taking over the expanded surface. Bind it via
-  `NookConfiguration.onReady` and render with `NookActivityHost`. The queue
-  yields the surface whenever the user is engaging it. See `Examples/ActivityNook`.
-- `Volume/` - an ambient volume glyph: `SystemVolumeObserver` tracks the default
-  output device's volume and mute via public CoreAudio APIs; `NookVolumeIndicator`
-  renders it as a compact-slot glyph. It shows the level - it does not intercept
-  or replace Apple's volume HUD. See `Examples/VolumeNook`.
-
-### The demo app
-
-- `Sources/NookApp/NookApp.swift` - the library entry point shared by both
-  launch surfaces; sets up the `NSApplication`, the coordinator, and a
-  menu-bar fallback.
-- `Sources/NookExecutable/main.swift` - a three-line SPM trampoline so
-  `swift run Nook` works.
-- `App/main.swift` + `App/Info.plist` - the Xcode app-target trampoline and
-  bundle metadata, for producing a real signed `.app`.
+File-by-file, including the demo app's two launch surfaces:
+[Repository map](docs/architecture.md). Conceptually:
+[Introduction](https://opennook.dev/start/introduction/).
 
 ## Requirements
 
 - macOS 15 or later
-- Xcode command line tools
+- Swift 5.9 or later, and the Xcode command line tools
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
   - only if you want the Xcode project
+
+## Install
+
+Add the package to your `Package.swift`, then depend on `NookApp` (and
+`NookComponents` if you want the add-ons):
+
+```swift
+.package(url: "https://github.com/twinkling-reality/opennook", from: "0.4.0"),
+```
+
+In Xcode: File -> Add Package Dependencies, paste the same URL. Full
+instructions: [Install](https://opennook.dev/start/install/).
+
+## A minimal nook
+
+Hand `NookApp.main` your expanded home view; the top bar, Settings, hotkey, and
+compact pill all come for free:
+
+```swift
+import NookApp
+import SwiftUI
+
+NookApp.main { MyHomeView() }
+```
+
+When you need more than a home view - compact slots, a theme, top-bar identity,
+lifecycle hooks, file drops - take the `NookConfiguration` overload:
+
+```swift
+var configuration = NookConfiguration()
+configuration.setHome { MyHomeView() }
+configuration.setCompactTrailing { MyGlyph() }
+configuration.chromeTheme = NookTheme(accent: "#3399FF", radius: .large)
+configuration.onFileDrop = { urls in /* accept/reject dropped files */ true }
+
+NookApp.main(configuration)
+```
+
+Your views read the resolved palette from the `\.nookResolvedTheme`
+environment value and shared services from `\.appServices`. The four-step
+walkthrough - register, configure, add state and services, drive the chrome -
+is [Your first nook](https://opennook.dev/start/first-nook/).
 
 ## Build and run the demo
 
@@ -117,7 +170,7 @@ swift run Nook      # run the demo
 swift test          # run the test suite
 ```
 
-Once it's running, press **⌥ Space** (or use the menu-bar item) to expand the
+Once it's running, press **⌥⌘;** (or use the menu-bar item) to expand the
 nook. You can rebind that shortcut in Settings -> Shortcut & nook.
 
 For a real `.app` bundle (signing, notarization, Cmd-R in Xcode):
@@ -134,298 +187,94 @@ cannot drift between them.
 
 ## Example apps
 
-Single-file examples under `Examples/` show how to build on OpenNook through
-public API only - no forking:
+Examples under `Examples/` show how to build on OpenNook through public API
+only - no forking. All but the playground and the showcase are a single `main.swift`:
 
 ```sh
 swift run HelloNook     # register one view, go
 swift run ClockNook     # custom home view + a custom compact slot
 swift run ThemedNook    # a host-supplied theme + lifecycle hooks
-swift run ChromeNook    # the deeper chrome seams: launch defaults, labels, motion, brand mark, status
+swift run ChromeNook    # the deeper chrome seams: launch defaults, notch fade, typing, labels, brand mark, status
 swift run LayoutNook    # expanded width + nookContentInsets (avoid double horizontal padding)
 swift run ShelfNook     # a drop-files-on-the-notch shelf (NookComponents)
 swift run ActivityNook  # a priority live-activity queue (NookComponents)
 swift run VolumeNook    # an ambient volume glyph in the compact pill (NookComponents)
 swift run MultiNook     # multiple interchangeable modules sharing one surface
+swift run CompanionNook # companion surfaces beside the nook, rim glow, scroll edge fade
+swift run PlaygroundNook # change the running nook live, then export Swift or a JSON preset
+swift run ShowcaseNook --scene player # finished-looking scenes: player, agenda, timer, progress, shelf, hud, compact
+swift run ShowcaseNook --scene agenda --theme Examples/Themes/aurora.json # the chrome painted by a theme file, reloaded on save
 ```
 
-## Start your own notch app
+Each one, grouped and explained:
+[Examples](https://opennook.dev/guides/examples/).
 
-You depend on OpenNook as a package and customize it through public API - you
-do **not** fork the framework.
+## Customize the chrome
 
-**1. Register a view.** Hand `NookApp.main` your expanded home view; the top
-bar, Settings, hotkey, and compact pill all come for free:
+`NookConfiguration` exposes the rest of the chrome through additive,
+non-breaking seams - every default reproduces the framework exactly, so you opt
+in only where you need to. `swift run PlaygroundNook` is the fastest way to see
+them: change the running nook from a controls window, then copy the result as
+Swift or a JSON preset.
 
-```swift
-import NookApp
-import SwiftUI
+| You want | Seam | Guide |
+| --- | --- | --- |
+| Launch defaults, hover and shimmer, the backdrop resolver, labels, metrics, motion, branding, the status banner | `preferenceDefaults`, `chromeBehavior`, `labels`, `metrics`, `motion`, `branding` | [Chrome customization](https://opennook.dev/guides/chrome-customization/) |
+| The chrome's look as data - palette, spacing, type, motion, backdrops - in Swift or a JSON theme file | `configuration.chromeTheme` | [Theming](https://opennook.dev/guides/theming/) |
+| Solid, translucent, or real Liquid Glass | `surfaceStyle` | [Surface materials](https://opennook.dev/guides/surface-materials/) |
+| The top bar, the lock and gear, the Settings screens | `configuration.topBar` | [Settings chrome](https://opennook.dev/guides/settings-chrome/) |
+| Expanded width, content insets, clearing the notch | `expandedWidth`, `nookContentInsets`, `notchClearance` | [Layout and content insets](https://opennook.dev/guides/layout-and-insets/#clearing-the-notch) |
+| Controls floating beside the nook | `addCompanion`, `companionStyle` | [Companion surfaces](https://opennook.dev/guides/companion-surfaces/) |
+| A glowing rim, faded scroll edges | `nookRimGlow`, `scrollEdgeFade` | [Rim glow and edge fade](https://opennook.dev/guides/panel-effects/) |
+| Typing and shortcuts inside the nook | `\.nookChromeActions` | [Typing in the nook](https://opennook.dev/guides/keyboard/) |
+| Which display the nook lives on | Settings -> Display | [Displays](https://opennook.dev/guides/displays/) |
+| Rebuilding configuration while it runs | `reloadActiveConfiguration`, `replaceChromeBehavior` | [Playground](https://opennook.dev/guides/playground/) |
+| Several interchangeable notch apps in one process | `NookHostConfiguration`, `NookModule` | [Multiple modules](https://opennook.dev/guides/multiple-modules/) |
+| The shelf, the activity queue, the volume glyph | `NookComponents` | [File shelf](https://opennook.dev/guides/file-shelf/), [Activity queue](https://opennook.dev/guides/activity-queue/), [Volume glyph](https://opennook.dev/guides/volume-glyph/) |
 
-NookApp.main { MyHomeView() }
-```
+## Ship it
 
-**2. Customize via `NookConfiguration`** when you need more than a home view -
-the compact slots, the chrome theme, the top bar's leading label/icon, the
-chrome flags, lifecycle hooks, and file drops:
+`swift run` is the dev loop. A real signed `.app` needs bundle identity in
+three places (`Package.swift`, `project.yml`, `App/Info.plist`), a product
+prefix that does not collide with the framework's `opennook.*` and
+`nook.shelf.*` preference keys, the entitlements template at
+[`App/Nook.entitlements`](App/Nook.entitlements) if you sandbox, `LSUIElement`
+for menu-bar-only behavior, and hardened runtime plus notarization. None of
+OpenNook's APIs require runtime exceptions. The checklist in full:
+[Shipping](https://opennook.dev/guides/shipping/).
 
-```swift
-var configuration = NookConfiguration()
-configuration.setHome { MyHomeView() }
-configuration.setCompactTrailing { MyGlyph() }
-configuration.theme = { appState in MyPalette.resolve(appState) }
+## Documentation
 
-// Top bar - leading cluster identity and chrome flags live on `topBar`.
-configuration.topBar.leadingTitle = { _ in "Today" }  // default: "Home"
-configuration.topBar.leadingIcon = "house"            // nil = brand mark; SF Symbol overrides
-configuration.topBar.showsTopBar = true               // false strips top bar + gear + lock
-configuration.topBar.showsSettings = true             // false drops the gear (top bar stays)
-configuration.setTopBarTrailingItems { MyGlyph() }    // host actions left of the lock/gear
+- [Getting started](https://opennook.dev/start/introduction/) and
+  [Your first nook](https://opennook.dev/start/first-nook/)
+- [API reference](https://opennook.dev/reference/api/) and
+  [Troubleshooting](https://opennook.dev/reference/troubleshooting/)
+- [Repository map](docs/architecture.md) - what lives where in this repo
+- [README media](docs/images/README.md) - how the images above are made
+- [Contributing](CONTRIBUTING.md)
+- Swift Package Index:
+  [package page](https://swiftpackageindex.com/twinkling-reality/opennook) ·
+  [generated documentation](https://swiftpackageindex.com/twinkling-reality/opennook/documentation)
 
-// Lifecycle hooks.
-configuration.onExpand    = { print("nook expanded") }
-configuration.onCompact   = { /* user dismissed / hover-exit collapsed the nook */ }
-configuration.onHide      = { /* nook went hidden */ }
-configuration.onFileDrop  = { urls in /* accept/reject dropped files */ true }
-configuration.onReady     = { coordinator in /* post-launch handle for components */ }
+## ContextAI fork additions
 
-NookApp.main(configuration)
-```
+This fork ([Context-Dev/opennook](https://github.com/Context-Dev/opennook)) tracks
+upstream `twinkling-reality/opennook` and adds host APIs that ContextAI needs:
 
-Your views read the resolved palette from the `\.nookResolvedTheme`
-environment value and shared services from `\.appServices`.
-
-**3. Add your state and services.** `AppState`
-(`Sources/NookKit/App/AppState.swift`) holds chrome state - add product state
-alongside it; `AppServices` (`Sources/NookKit/App/AppServices.swift`) is the
-dependency container threaded into views.
-
-**4. Drive the chrome** through `AppCoordinator` - `showNook()`, `showHome()`,
-`hideNook()`, `toggleNook()`, and `toggleKeepNookOpen()` are the lifecycle
-vocabulary; the global hotkey and menu-bar fallback already call into them.
-
-User-driven calls stay expanded by default. For a background result that should
-surface itself without lingering forever, opt that one presentation into unattended
-auto-compact:
-
-```swift
-resultPipeline.onResult = {
-    coordinator.showHome(
-        presentation: .unattended(timeout: .seconds(8))
-    )
-}
-```
-
-If the pointer never enters the expanded nook, it compacts after the timeout. The
-first pointer entry, file drag, keep-open action, or presentation pin cancels the
-deadline for that expansion; a later pointer exit then compacts immediately through
-the normal hover lifecycle. Repeated unattended presentations move the single
-deadline forward.
-
-The default `.userInitiated` behavior has no timer, so the framework's global hotkey
-and keyboard-driven workflows remain under explicit user control. A custom peek
-shortcut can opt in deliberately:
-
-```swift
-coordinator.toggleNook(
-    presentation: .unattended(timeout: .seconds(8))
-)
-```
-
-Rename the product (`Nook` -> your app) by editing `project.yml`,
-`App/Info.plist`, and the `Package.swift` product name when you're ready to
-ship.
-
-## Deeper chrome customization
-
-`NookConfiguration` exposes the rest of the chrome through additive, non-breaking
-seams - every default reproduces the framework exactly, so you opt in only where
-you need to. The [Chrome customization guide](https://opennook.dev/guides/chrome-customization/)
-covers each seam in full; the headlines are below.
-
-**Launch defaults.** Ship your own out-of-box appearance, global hotkey, and
-display target. Seed-only: a value the user has changed in Settings always wins,
-and the seed is never persisted (so a later build can revise it for untouched
-users):
-
-```swift
-configuration.preferenceDefaults = NookPreferenceDefaults(
-    appearance: NookAppearancePreferences(
-        chromePalette: .dark, surfaceStyle: .translucent, presentation: .floating
-    )
-)
-```
-
-`surfaceStyle` is `.solid`, `.translucent`, or `.liquidGlass` - the real macOS 26
-Liquid Glass material, with a pre-Tahoe approximation so the package still builds
-and runs on earlier systems. See
-[Surface materials](https://opennook.dev/guides/surface-materials/).
-
-**Chrome behavior.** Hover side-effects, the cold-launch shimmer, and the
-appearance->backdrop mapping:
-
-```swift
-configuration.chromeBehavior = NookChromeBehavior(
-    hoverBehavior: .all,         // default []: opt into hover haptics / keep-visible
-    showsLaunchShimmer: false,   // default true: launch silently
-    backdrop: { preferences, scheme, reduceTransparency in
-        .vibrancy(.init(material: .hudWindow, darkenOpacity: 0.3))
-    }
-)
-```
-
-Compact slot dimming is an opt-in developer API; it stays disabled (`nil`) by
-default. Enable the recommended timing and opacity before constructing the
-coordinator, or provide a custom `NookCompactIdleDimming` value:
-
-```swift
-configuration.chromeBehavior.compactIdleDimming = .standard
-```
-
-Hover, lifecycle changes, feedback, drag entry, and module switches restore full
-opacity automatically. Report product activity that OpenNook cannot infer through
-the coordinator, or from compact SwiftUI content through the environment action:
-
-```swift
-configuration.onReady = { coordinator in
-    backgroundActivity.onEvent = { coordinator.noteCompactActivity() }
-}
-
-@Environment(\.nookCompactActivity) private var noteCompactActivity
-
-StatusGlyph()
-    .onChange(of: model.status) { noteCompactActivity() }
-```
-
-`chromeBehavior` is captured when the surface is constructed; changing its idle
-dimming value on an already-running coordinator does not reconfigure that surface.
-
-**Labels, metrics, motion.** Localize chrome strings, tune the few fixed layout
-values, retune the in-panel springs:
-
-```swift
-configuration.labels.settingsBreadcrumb = "Préférences"
-configuration.metrics.compactSlotSize = 28
-configuration.motion.viewModeChange = .snappy
-```
-
-**Status banner.** Post info / success / warning / error from any `AppState`
-handle; suppress the framework banner if you render your own:
-
-```swift
-appState.showStatus("Imported 3 files", severity: .success)
-configuration.topBar.showsStatusBanner = false
-```
-
-**Identity.** Name the product, drop in a custom brand mark (replaces the OpenNook
-glyph in the top bar, About card, and menu bar), or turn the menu-bar item off -
-all reachable from a single-module `NookConfiguration`:
-
-```swift
-configuration.branding = NookHostBranding(
-    hostName: "ContextNook",
-    hostTagline: "A focused notch app.",
-    mark: { size, color in AnyView(MyMark(color: color).frame(width: size, height: size)) }
-)
-configuration.showsMenuBarExtra = false
-```
-
-## Multiple modules in one notch
-
-A single host can run several interchangeable *modules* - independent notch
-apps sharing one surface, one menu bar, and one set of preferences. Each
-module ships its own `NookConfiguration`, its own services, and an optional
-global shortcut for direct-jump or cycle-through. Use this when the notch
-should host distinct surfaces (a clock, a counter, a notepad) that the user
-flips between rather than nesting inside one home view.
-
-```swift
-import NookApp
-
-var host = NookHostConfiguration()
-
-// A NookModule type that builds its own configuration and services.
-host.register(CounterModule.moduleDescriptor) { context in
-    CounterModule(context: context)
-}
-
-// Or just register a configuration closure for the simpler cases.
-host.register(
-    NookModuleDescriptor(id: "com.example.clock", displayName: "Clock", icon: "clock"),
-    configuration: { clockConfiguration() }
-)
-
-host.defaultModule = CounterModule.moduleDescriptor.id
-host.moduleCycleHotkey = NookHotkey(keyCode: 50, carbonModifiers: 4096 | 2048, keySymbol: "`")
-
-// Host-product identity - the framework chrome (About card, show/hide hotkey
-// label, menu-bar fallback) reads `hostName` and `hostTagline` from here.
-// Defaults reproduce the demo strings exactly.
-host.branding = NookHostBranding(
-    hostName: "ContextNook",
-    hostTagline: "Three modules, one notch."
-)
-
-NookApp.main(host)
-```
-
-By default the switcher lives in the menu-bar item (a "Modules" section) plus
-the cycle / per-module hotkeys - nothing is planted in a module's expanded
-surface. Set `host.moduleSwitcherPlacement = .leadingCluster` for a compact
-in-surface switcher folded into the top bar, or `.none` for hotkeys only.
-
-The active module's hooks/services drive the surface; switching is one
-atomic transaction on the lifecycle chain (no half-applied state, no
-arbiter claims leaking across modules). See `Examples/MultiNook/main.swift`
-for the full pattern - a `NookModule` class with a typed `ServiceKey`-backed
-dependency, three modules with per-module top-bar identity, and the
-closure-registration shortcut for the simpler ones.
-
-## Shipping checklist
-
-The `swift run` paths are for the dev loop. To ship a real signed `.app`
-you need a few extra pieces - most of them tiny, none of them magic.
-
-- **Bundle identity.** Rename the product in three places: `Package.swift`
-  (the `.executable(name:)` and `.library(name:)`), `project.yml`
-  (`name:`, `targets:`, `PRODUCT_BUNDLE_IDENTIFIER`), and `App/Info.plist`
-  (`CFBundleIdentifier`, `CFBundleName`). The reverse-DNS id you pick is
-  used by `NookModuleContext.makeDefault` to name on-disk containers and
-  per-module `UserDefaults` suites, so pick before you ship.
-- **Persistence suites.** `NookKit` writes its own preferences into
-  `UserDefaults.standard` under the `opennook.*` prefix (`opennook.appearance.v1`,
-  `opennook.display.v1`, `opennook.hotkey.v1`, `opennook.module.default`);
-  `NookComponents.Shelf` writes `nook.shelf.items`. If you're using
-  `NookHostConfiguration`, each module gets its own `UserDefaults` suite via
-  `NookModuleContext`. Don't collide host product state with the `opennook.*`
-  or `nook.shelf.*` keys.
-- **Entitlements.** A ready-to-copy template lives at
-  [`App/Nook.entitlements`](App/Nook.entitlements) with the minimum that lets
-  every framework feature work inside the App Sandbox:
-  `com.apple.security.app-sandbox`,
-  `com.apple.security.files.user-selected.read-write` (shelf drag-in and the
-  file picker - see below), `com.apple.security.files.bookmarks.app-scope`
-  (scoped-bookmark persistence). It is intentionally *not* wired into the build
-  by default, so the demo and the dev loop stay unsandboxed; to actually sandbox
-  the app, add `CODE_SIGN_ENTITLEMENTS: App/Nook.entitlements` to the
-  `NookHostApp` target in `project.yml` and regenerate. The global hotkey is
-  Carbon and needs no entitlement. CoreAudio default-output listening is
-  read-only and needs no entitlement. The shelf detects the sandbox at runtime
-  (`ShelfRuntime.isSandboxed`) and switches to a stricter acceptance mode.
-- **File pickers.** Modules present open/save panels through the host's
-  `NookFilePicker` (resolved from `\.appServices` via `NookFilePickerKey`), which
-  activates the app so the panel is interactive from the non-activating notch
-  panel and holds the surface open while it's up. Two caveats: (1) under the
-  sandbox, `files.user-selected.read-write` is what makes a picked file readable,
-  so ship the entitlement above; (2) under `swift run` the binary is unbundled
-  and unsandboxed with no powerbox, so the panel can't enter TCC-protected
-  folders (Downloads, Desktop, Documents) - run the signed `.app` (the
-  `NookHostApp` target, e.g. Cmd-R in Xcode) or grant your terminal Full Disk
-  Access. This is a dev-loop artifact, not a shipping limitation.
-- **Menu-bar accessory, no Dock.** Set `LSUIElement = true` in
-  `Info.plist` if you want the menu-bar-only behavior the demo ships.
-- **Hardened runtime + notarization** for distribution outside the Mac
-  App Store. Sign with a Developer ID, enable hardened runtime, notarize.
-  None of OpenNook's APIs require runtime exceptions.
+- **Unattended presentations.** `coordinator.showHome(presentation: .unattended(timeout:))`
+  and `toggleNook(presentation:)` open the nook for a background result and compact it
+  after the timeout if the pointer never enters. The first pointer entry, file drag,
+  keep-open action, or presentation pin cancels the deadline for that expansion.
+- **Attached accessory.** `NookConfiguration.setAttachedAccessory(style:_:)` hangs host
+  content beneath the expanded nook with chrome-owned motion.
+- **Compact idle dimming** (`NookChromeBehavior.compactIdleDimming`) and the
+  `\.nookCompactActivity` action that restores the compact slots.
+- **Hover admission against logical geometry**, so the spring's presentation tail after a
+  collapse never reads as a fresh hover.
+- **Escape handling** (`NookChromeBehavior.escapeBehavior`), **trackpad back navigation**
+  through the breadcrumb route, a **host-owned Settings entry point**
+  (`NookTopBarConfiguration.onSettingsRequest`), a reusable `NookHotkeyRecorder`, and a
+  confirmed Reset All Settings.
 
 ## Licensing
 

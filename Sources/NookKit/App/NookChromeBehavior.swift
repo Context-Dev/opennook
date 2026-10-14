@@ -19,8 +19,8 @@ public enum NookEscapeBehavior: Sendable {
 }
 
 /// Host-process-global *chrome behavior* knobs that the framework otherwise hardcodes:
-/// hover side-effects, the cold-launch greeting, compact idle treatment, and how
-/// appearance preferences map to the surface backdrop.
+/// hover side-effects, the cold-launch greeting, compact idle treatment, how appearance
+/// preferences map to the surface backdrop, and how the nook shares the keyboard.
 ///
 /// These are distinct from ``NookConfiguration``'s per-surface content/theme seams -
 /// they describe how the single shared notch surface *behaves*, so they live at the
@@ -32,21 +32,25 @@ public enum NookEscapeBehavior: Sendable {
 /// `NookApp.main`, which crosses to the main actor - like the configurations that carry
 /// it. Not `Equatable` because ``backdrop`` carries a closure.
 public struct NookChromeBehavior: Sendable {
-    /// Resolves the surface backdrop from the live appearance state. Returns the
+    /// Resolves the surface backdrop from the live chrome state. Returns the
     /// `NSVisualEffectView` material / darken / solid fill the chrome paints behind its
-    /// content. Receives the current ``NookAppearancePreferences``, the effective
-    /// `ColorScheme` (after the host's palette override + the system scheme), and whether
-    /// the system's Reduce Transparency is on.
+    /// content. Receives a ``NookBackdropContext``: the current ``NookAppearancePreferences``,
+    /// the effective `ColorScheme` (after the host's palette override + the system scheme),
+    /// whether the system's Reduce Transparency is on, and what the chrome is showing - its
+    /// `NookState` and its resolved `NookChromeForm`.
+    ///
+    /// It is re-run on every expand and collapse, so returning a different backdrop per state
+    /// is all it takes to paint the collapsed pill and the expanded panel differently.
     ///
     /// `@Sendable @MainActor`: invoked during the main-actor backdrop sync and carried by
     /// a `Sendable` `NookChromeBehavior`.
     public typealias BackdropResolver =
-        @Sendable @MainActor (NookAppearancePreferences, ColorScheme, Bool) -> NookBackdrop
+        @Sendable @MainActor (NookBackdropContext) -> NookBackdrop
 
     /// Side-effects to apply while the cursor is over the chrome. Defaults to `[]` (the
     /// framework default - neither hover-keep-visible nor hover haptics). Set to
-    /// ``NookHoverBehavior/all`` (or a subset) to opt in. Read once when the surface is
-    /// built, like ``NookConfiguration/style``.
+    /// `NookHoverBehavior.all` (or a subset) to opt in. Applied when the surface is built;
+    /// ``AppCoordinator/replaceChromeBehavior(_:)`` changes it at runtime.
     public var hoverBehavior: NookHoverBehavior
 
     /// Whether the one-shot perimeter shimmer plays at cold launch. Defaults to `true`
@@ -65,28 +69,113 @@ public struct NookChromeBehavior: Sendable {
     /// built; changing this value does not reconfigure an already-running surface.
     public var compactIdleDimming: NookCompactIdleDimming?
 
-    /// Overrides how appearance preferences map to the surface backdrop. `nil` (the
+    /// Overrides how the chrome state maps to the surface backdrop. `nil` (the
     /// default) uses the framework mapping (``NookBackdropMapping/notchBackdrop(preferences:effectiveColorScheme:reduceTransparency:)``):
-    /// solid black/white for `.solid` or Reduce Transparency, otherwise a `.sidebar`
-    /// vibrancy with a legibility darken pass. Supply a resolver to paint a brand-specific
-    /// material, darken, or solid color while still reacting to the live appearance state.
+    /// solid black/white for `.solid` or Reduce Transparency, a `.sidebar` vibrancy with a
+    /// legibility darken pass for `.translucent`, and theme-tinted glass for `.liquidGlass`
+    /// (shaded as ``glassShading`` says). Supply a resolver to paint a brand-specific
+    /// material, darken, or solid color while still reacting to the live appearance state -
+    /// and, through ``NookBackdropContext/state``, to paint the collapsed pill and the
+    /// expanded panel differently.
+    ///
+    /// ```swift
+    /// configuration.chromeBehavior.backdrop = { context in
+    ///     context.isExpanded ? .liquidGlass(.init(shading: .notchFade())) : .solid(.black)
+    /// }
+    /// ```
     public var backdrop: BackdropResolver?
+
+    /// What companions inheriting the chrome's backdrop paint (`NookCompanionBackdrop.inherit`),
+    /// resolved from the same live appearance state as ``backdrop``. `nil` (the default) uses
+    /// the framework's choice: the chrome's own backdrop, except under
+    /// ``NookGlassShading/notchFade``, where the expanded chrome's companions get the same
+    /// glass with a light even tint instead of a squeezed copy of the tall fade. A resolver
+    /// that returns `nil` gives companions the chrome's backdrop.
+    public var companionBackdrop: CompanionBackdropResolver?
+
+    /// Resolves the backdrop companions inherit; `nil` means the chrome's own. Receives the
+    /// same ``NookBackdropContext`` as ``BackdropResolver``, so companions beside the compact
+    /// pill can be painted differently from those under the expanded panel. See
+    /// ``companionBackdrop``.
+    public typealias CompanionBackdropResolver =
+        @Sendable @MainActor (NookBackdropContext) -> NookBackdrop?
+
+    /// How the framework's Liquid Glass is shaded when the person picks Liquid Glass. Defaults
+    /// to ``NookGlassShading/even``. Ignored when ``backdrop`` supplies a resolver of its own.
+    ///
+    /// ``NookGlassShading/notchFade`` is state-aware: the fade paints on the expanded panel,
+    /// and the collapsed pill - which is barely taller than the hardware notch - goes solid so
+    /// it reads as the notch itself.
+    ///
+    /// ```swift
+    /// configuration.chromeBehavior.glassShading = .notchFade  // black at the notch, clear below
+    /// ```
+    public var glassShading: NookGlassShading
+
+    /// How the nook shares the keyboard with the app in front: whether the global shortcut gives
+    /// it the keyboard, and whether the framework installs the Edit menu text inputs need for
+    /// their shortcuts. See ``NookKeyboardBehavior``.
+    public var keyboard: NookKeyboardBehavior
+
+    /// Fixes what resting the pointer on the compact pill does, over the person's choice.
+    /// `nil` (the default) follows ``NookAppearancePreferences/openOnHover`` and its timings,
+    /// which Settings offers; a value here applies instead, and Settings hides those rows, the
+    /// same way a theme's pins hide the controls they pin.
+    ///
+    /// ```swift
+    /// configuration.chromeBehavior.hoverIntent = NookHoverIntent(action: .peek, delay: .milliseconds(120))
+    /// ```
+    public var hoverIntent: NookHoverIntent?
 
     public init(
         hoverBehavior: NookHoverBehavior = [],
         showsLaunchShimmer: Bool = true,
         escapeBehavior: NookEscapeBehavior = .compact,
         backdrop: BackdropResolver? = nil,
-        compactIdleDimming: NookCompactIdleDimming? = nil
+        compactIdleDimming: NookCompactIdleDimming? = nil,
+        glassShading: NookGlassShading = .even,
+        companionBackdrop: CompanionBackdropResolver? = nil,
+        keyboard: NookKeyboardBehavior = .default,
+        hoverIntent: NookHoverIntent? = nil
     ) {
         self.hoverBehavior = hoverBehavior
         self.showsLaunchShimmer = showsLaunchShimmer
         self.escapeBehavior = escapeBehavior
         self.backdrop = backdrop
         self.compactIdleDimming = compactIdleDimming
+        self.glassShading = glassShading
+        self.companionBackdrop = companionBackdrop
+        self.keyboard = keyboard
+        self.hoverIntent = hoverIntent
     }
 
     /// The framework defaults - what ships when a host sets no chrome behavior. Using
     /// this reproduces today's behavior exactly.
     public static let `default` = NookChromeBehavior()
+}
+
+/// How the nook shares the keyboard with the app in front.
+///
+/// The nook's panel never activates the app: the app the person was using stays in front, and
+/// the nook takes the keyboard only for typing into it. A click on a text input in the nook
+/// always gives it the keyboard, and the keyboard goes back to the app in front when the nook
+/// collapses or hides. These knobs cover the rest.
+public struct NookKeyboardBehavior: Sendable, Equatable {
+    /// When the global show/hide shortcut opens the nook, also give the nook the keyboard, so a
+    /// text input that has focus takes typing without a click. Defaults to `false`: the shortcut
+    /// only shows the nook, and typing still goes to the app in front.
+    public var shortcutTakesKeyboardFocus: Bool
+
+    /// Install the hidden Edit menu (``NookEditMenu``) at launch when the app has no Edit menu of
+    /// its own, so Command-X, C, V, A, Z, and Shift-Command-Z work in text inputs. Defaults to
+    /// `true`.
+    public var installsEditMenu: Bool
+
+    public init(shortcutTakesKeyboardFocus: Bool = false, installsEditMenu: Bool = true) {
+        self.shortcutTakesKeyboardFocus = shortcutTakesKeyboardFocus
+        self.installsEditMenu = installsEditMenu
+    }
+
+    /// The framework defaults: the shortcut only shows the nook, and the Edit menu is installed.
+    public static let `default` = NookKeyboardBehavior()
 }

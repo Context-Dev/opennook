@@ -65,7 +65,7 @@ struct SettingsDataCommandRow: View {
             case .standard:
                 isHovering ? theme.accent : theme.headerInactiveIcon
             case .destructive:
-                Color.red.opacity(0.92)
+                theme.destructive.opacity(0.92)
         }
     }
 
@@ -74,8 +74,60 @@ struct SettingsDataCommandRow: View {
             case .standard:
                 isHovering ? theme.accent : theme.primaryLabel
             case .destructive:
-                Color.red.opacity(0.95)
+                theme.destructive.opacity(0.95)
         }
+    }
+}
+
+/// "Reset All Settings" - the built-in Settings screen's reset command, for a host that builds
+/// its own Settings screen. Runs ``NookChromeActions/resetSettings``: appearance, the global
+/// shortcut, and the display return to the host's defaults.
+///
+/// Use it inside chrome content, which supplies the chrome's actions.
+///
+/// ```swift
+/// NookSettingsGroup("Data") { NookResetSettingsSection() }
+/// ```
+public struct NookResetSettingsSection: View {
+    @Environment(\.nookChromeActions) private var actions
+    @Environment(\.nookChromeLabels) private var labels
+    @State private var showsResetConfirmation = false
+
+    public init() {}
+
+    public var body: some View {
+        SettingsDataCommandRow(
+            title: labels.settings.resetTitle,
+            subtitle: labels.settings.resetDetail,
+            icon: "arrow.counterclockwise",
+            style: .standard,
+            action: { showsResetConfirmation = true }
+        )
+        // Resetting forgets every preference the person chose, so it asks first. The nook
+        // stays expanded while the dialog is up, even after the pointer leaves for it.
+        .confirmationDialog(
+            labels.settings.resetConfirmationTitle,
+            isPresented: $showsResetConfirmation
+        ) {
+            Button(labels.settings.resetConfirmationConfirm, role: .destructive) {
+                actions.resetSettings()
+            }
+            Button(labels.settings.resetConfirmationCancel, role: .cancel) {}
+        } message: {
+            Text(labels.settings.resetConfirmationMessage)
+        }
+        .nookKeepsExpanded(while: $showsResetConfirmation)
+    }
+}
+
+/// The host's name, version, and tagline beside its brand mark - the body of the built-in
+/// Settings screen's About group, for a host that builds its own Settings screen. Reads
+/// ``NookHostBranding`` from the chrome.
+public struct NookAboutSettingsSection: View {
+    public init() {}
+
+    public var body: some View {
+        SettingsAboutCard()
     }
 }
 
@@ -88,18 +140,13 @@ struct SettingsAboutCard: View {
     @Environment(\.nookChromeTypography) private var typography
     @Environment(\.nookChromeMetrics) private var metrics
     @Environment(\.nookHostBranding) private var branding
+    @Environment(\.nookChromeLabels) private var labels
 
     /// Reads `CFBundleShortVersionString` from the running bundle. The SPM `swift run`
     /// build has no `Info.plist` on disk, so it falls back to the package version.
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
     }
-
-    /// Default tagline used when the host has not overridden ``NookHostBranding/hostTagline``.
-    /// References OpenNook as the framework, not the host product - the host's
-    /// own marketing copy belongs in a `hostTagline` override.
-    private static let defaultTagline =
-        "A demo notch app built with OpenNook, an open-source framework for macOS notch apps."
 
     var body: some View {
         HStack(alignment: .top, spacing: metrics.settingsRowSpacing) {
@@ -115,11 +162,13 @@ struct SettingsAboutCard: View {
                     Text(branding.hostName)
                         .font(typography.settingsEmphasis)
                         .foregroundStyle(theme.primaryLabel.opacity(metrics.settingsTitleEmphasisOpacity))
-                    Text("v\(version)")
+                    Text(labels.settings.version(version))
                         .font(typography.settingsVersionLabel)
                         .foregroundStyle(theme.tertiaryLabel)
                 }
-                Text(branding.hostTagline ?? Self.defaultTagline)
+                // The default tagline references OpenNook as the framework, not the host
+                // product - the host's own copy belongs in a `hostTagline` override.
+                Text(branding.hostTagline ?? labels.settings.defaultTagline)
                     .font(typography.settingsCaption)
                     .foregroundStyle(theme.secondaryLabel)
                     .fixedSize(horizontal: false, vertical: true)

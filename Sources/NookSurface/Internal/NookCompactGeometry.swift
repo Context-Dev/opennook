@@ -19,20 +19,29 @@ struct NookCompactGeometry {
 
     private static let floatingGap: CGFloat = 8
     private static let floatingTopSpacing: CGFloat = 8
-    private static let notchCornerRadii: (top: CGFloat, bottom: CGFloat) = (top: 6, bottom: 14)
 
     let form: NookChromeForm
     let notchSize: CGSize
     let menubarHeight: CGFloat
     let leadingWidth: CGFloat
     let trailingWidth: CGFloat
+    /// The style's compact radii in the notch form (``NookStyle/compactTopCornerRadius`` and
+    /// ``NookStyle/compactBottomCornerRadius``).
+    var notchCornerRadii: (top: CGFloat, bottom: CGFloat) = (
+        top: NookStyle.standardCompactTopCornerRadius,
+        bottom: NookStyle.standardCompactBottomCornerRadius
+    )
+    /// The style's floating capsule radius, or `nil` for half the pill height.
+    var floatingCornerRadius: CGFloat?
+    /// The style's outline, so hit-testing follows the same path the chrome draws.
+    var outline: NookOutline = .standard
 
     var cornerRadii: (top: CGFloat, bottom: CGFloat) {
         switch form {
             case .notch:
-                return Self.notchCornerRadii
+                return notchCornerRadii
             case .floating:
-                let radius = max(notchSize.height / 2, 8)
+                let radius = floatingCornerRadius ?? max(notchSize.height / 2, 8)
                 return (top: radius, bottom: radius)
         }
     }
@@ -91,7 +100,8 @@ struct NookCompactGeometry {
         NookShape(
             form: form,
             topCornerRadius: cornerRadii.top,
-            bottomCornerRadius: cornerRadii.bottom
+            bottomCornerRadius: cornerRadii.bottom,
+            outline: outline
         )
     }
 

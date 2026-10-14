@@ -112,7 +112,7 @@ final class NookChromeStyleTests: XCTestCase {
         XCTAssertEqual(metrics.brandMarkOpacity, 0.92)
         // Compact pill
         XCTAssertEqual(metrics.compactLeadingGlyphOpacity, 0.88)
-        XCTAssertEqual(metrics.compactTrailingMarkSize, 11)
+        XCTAssertEqual(metrics.compactTrailingMarkSize, 20)
         XCTAssertEqual(metrics.compactTrailingMarkStrokeWidth, 1.1)
         XCTAssertEqual(metrics.compactTrailingMarkOpacity, 0.82)
         // Status banner
@@ -223,7 +223,7 @@ final class NookChromeStyleTests: XCTestCase {
         XCTAssertEqual(metrics.volumeGlyphOpacity, 0.85)
         // Placeholder
         XCTAssertEqual(metrics.placeholderStackSpacing, 10)
-        XCTAssertEqual(metrics.placeholderMarkSize, 28)
+        XCTAssertEqual(metrics.placeholderMarkSize, 56)
         XCTAssertEqual(metrics.placeholderMarkStrokeWidth, 2)
         XCTAssertEqual(metrics.placeholderVerticalPadding, 40)
         // Settings - spacing
@@ -273,6 +273,23 @@ final class NookChromeStyleTests: XCTestCase {
         var configuration = NookConfiguration()
         configuration.motion.statusBanner = .linear(duration: 1)
         XCTAssertNotEqual(configuration.motion, .default)
+    }
+
+    /// The curves the Settings disclosure, the module switch, and the activity card used to
+    /// hardcode are the defaults of their motion fields.
+    func testRoutedMotionDefaultsReproduceTheHardcodedCurves() {
+        let motion = NookChromeMotion.default
+        XCTAssertEqual(motion.settingsDisclosure, Animation.spring(response: 0.30, dampingFraction: 0.86))
+        XCTAssertEqual(motion.moduleSwitch, Animation.easeInOut(duration: 0.22))
+        XCTAssertEqual(motion.activityCard, Animation.spring(response: 0.36, dampingFraction: 0.86))
+
+        var configuration = NookConfiguration()
+        configuration.motion.settingsDisclosure = .linear(duration: 1)
+        configuration.motion.moduleSwitch = .linear(duration: 2)
+        configuration.motion.activityCard = .linear(duration: 3)
+        XCTAssertEqual(configuration.motion.settingsDisclosure, .linear(duration: 1))
+        XCTAssertEqual(configuration.motion.moduleSwitch, .linear(duration: 2))
+        XCTAssertEqual(configuration.motion.activityCard, .linear(duration: 3))
     }
 
     // MARK: - Status banner visibility flag

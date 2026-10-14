@@ -254,6 +254,71 @@ final class AppCoordinatorTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 30_000_000)  // 30 ms - generous on CI
     }
 
+    // MARK: - Claims while Settings is open
+
+    /// A claim granted while Settings is the view opens onto the claim's content, not Settings,
+    /// and Settings comes back once the last claim ends.
+    func testAClaimSetsSettingsAsideAndRestoresIt() async throws {
+        let a = SpyModule(id: "A", expandLog: ExpandLog())
+        let surface = FakeNookSurface()
+        let coordinator = makeCoordinator(modules: [a], surface: surface)
+        coordinator.appState.showSettings()
+
+        let tokenGrant = await coordinator.beginTransientPresentation(NookSurfaceClaim(moduleID: "A"))
+        let token = try XCTUnwrap(tokenGrant)
+        XCTAssertTrue(coordinator.appState.isHomeView, "the claim's content shows, not Settings")
+
+        await coordinator.endTransientPresentation(token)
+        XCTAssertTrue(coordinator.appState.isSettingsView, "Settings comes back after the claim")
+    }
+
+    /// A preempting claim keeps Settings aside; it only comes back after the last claim.
+    func testSettingsStaysAsideUntilTheLastClaimEnds() async throws {
+        let a = SpyModule(id: "A", expandLog: ExpandLog())
+        let surface = FakeNookSurface()
+        let coordinator = makeCoordinator(modules: [a], surface: surface)
+        coordinator.appState.showSettings()
+
+        let normalGrant = await coordinator.beginTransientPresentation(NookSurfaceClaim(moduleID: "A"))
+        let normal = try XCTUnwrap(normalGrant)
+        let urgentGrant = await coordinator.beginTransientPresentation(
+            NookSurfaceClaim(moduleID: "A", priority: .urgent)
+        )
+        let urgent = try XCTUnwrap(urgentGrant)
+        await coordinator.endTransientPresentation(urgent)
+        XCTAssertTrue(coordinator.appState.isHomeView, "a claim still holds the surface")
+
+        await coordinator.endTransientPresentation(normal)
+        XCTAssertTrue(coordinator.appState.isSettingsView)
+    }
+
+    /// A view the person picks during the claim wins: Settings is not forced back over it.
+    func testChoosingAViewDuringAClaimCancelsTheRestore() async throws {
+        let a = SpyModule(id: "A", expandLog: ExpandLog())
+        let surface = FakeNookSurface()
+        let coordinator = makeCoordinator(modules: [a], surface: surface)
+        coordinator.appState.showSettings()
+
+        let tokenGrant = await coordinator.beginTransientPresentation(NookSurfaceClaim(moduleID: "A"))
+        let token = try XCTUnwrap(tokenGrant)
+        coordinator.appState.showHome()
+        await coordinator.endTransientPresentation(token)
+        XCTAssertTrue(coordinator.appState.isHomeView)
+    }
+
+    /// Outside Settings a claim changes nothing about the view.
+    func testAClaimLeavesHomeAlone() async throws {
+        let a = SpyModule(id: "A", expandLog: ExpandLog())
+        let surface = FakeNookSurface()
+        let coordinator = makeCoordinator(modules: [a], surface: surface)
+
+        let tokenGrant = await coordinator.beginTransientPresentation(NookSurfaceClaim(moduleID: "A"))
+        let token = try XCTUnwrap(tokenGrant)
+        XCTAssertTrue(coordinator.appState.isHomeView)
+        await coordinator.endTransientPresentation(token)
+        XCTAssertTrue(coordinator.appState.isHomeView)
+    }
+
     /// REGRESSION: the arbiter's own `expand()` must NOT trip `isUserEngaged`. Before
     /// the fix, `isUserEngaged` read `appState.isNookVisible`, which mirrored the
     /// surface and flipped `true` as soon as the arbiter expanded - silently disabling
@@ -778,7 +843,28 @@ final class AppCoordinatorTests: XCTestCase {
             "runWithTimeout returned in \(elapsed)s — must be near the 80 ms deadline, not the 60 s parked sleep"
         )
         XCTAssertFalse(outcome.didFinish, "the parked work must not be allowed to finish")
+        // The work is cancelled, not awaited: its `catch` runs on the main actor after the return.
+        let deadline = Date().addingTimeInterval(1)
+        while !outcome.didCancel, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(outcome.didCancel, "the work task must be cancelled (Task.sleep throws)")
+    }
+
+    /// Work that ignores cancellation cannot hold the switch tail past the deadline: the call
+    /// returns on time while the work is still running.
+    func testRunWithTimeoutReturnsOnTimeWhenWorkIgnoresCancellation() async throws {
+        let outcome = TimeoutOutcome()
+        let start = Date()
+
+        await AppCoordinator.runWithTimeout(.milliseconds(80), label: "test.stubborn") {
+            // A busy wait that never checks for cancellation, yielding so the timer can run.
+            let end = Date().addingTimeInterval(0.6)
+            while Date() < end { await Task.yield() }
+            outcome.didFinish = true
+        }
+
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 0.5, "returned in \(elapsed)s; the deadline is 80 ms, the work runs 600 ms")
+        XCTAssertFalse(outcome.didFinish, "the work is still running when the deadline returns")
     }
 
     /// Work that finishes inside the deadline returns promptly without timing out:
@@ -972,5 +1058,31 @@ final class AppCoordinatorTests: XCTestCase {
             surface.staysExpandedOnHoverExit,
             "release returns to the user's keepNookOpen preference, not a hardcoded false"
         )
+    }
+
+    /// REGRESSION: turning the lock off, or opening the nook, projected the lock alone onto the
+    /// surface and dropped a pin that was still held, so a popover's nook could collapse under it.
+    func testLockAndOpenKeepAPinThatIsStillHeld() async {
+        let log = ExpandLog()
+        let a = SpyModule(id: "A", expandLog: log)
+        let surface = FakeNookSurface()
+        let coordinator = makeCoordinator(modules: [a], surface: surface)
+        coordinator.resetAllSettingsToDefaults()
+
+        let handle = coordinator.presentationPinning.pin()
+        await drainAndPump(coordinator)
+        XCTAssertTrue(surface.staysExpandedOnHoverExit)
+
+        coordinator.toggleKeepNookOpen()  // on
+        coordinator.toggleKeepNookOpen()  // off, while the pin is held
+        XCTAssertTrue(surface.staysExpandedOnHoverExit, "the pin still holds the nook open")
+
+        coordinator.showNook()
+        await drainAndPump(coordinator)
+        XCTAssertTrue(surface.staysExpandedOnHoverExit, "opening the nook keeps the pin")
+
+        handle.release()
+        await drainAndPump(coordinator)
+        XCTAssertFalse(surface.staysExpandedOnHoverExit)
     }
 }

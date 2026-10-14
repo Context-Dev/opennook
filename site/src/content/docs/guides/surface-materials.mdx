@@ -50,12 +50,16 @@ scheme, and whether Reduce Transparency is on.
 - **`.translucent`** paints a frosted `NSVisualEffectView` sidebar material
   sampling the wallpaper behind the window, with a legibility darken pass
   composited on top. The darken scales with `backdropStrength` (the Settings
-  "Translucency strength" slider) so the user can let more wallpaper through.
+  "Translucency strength" slider, `0.15` to `1`; the mapping clamps any other
+  value into that range) so the user can let more wallpaper through.
 - **`.liquidGlass`** paints Apple's Liquid Glass material on macOS 26 (Tahoe)
   and later, and a layered approximation on earlier systems. The default mapping
-  uses neutral, untinted glass - the real material refracts the wallpaper on its
-  own - with a light top-to-bottom darken so the surface reads glassier as it
-  nears the wallpaper.
+  tints the glass toward the resolved theme - black for dark chrome, white for
+  light - because the real material otherwise flips its own light/dark treatment
+  to match the wallpaper and can end up fighting the chrome's text. It adds a
+  matching top-to-bottom scrim that tapers toward the bottom, so the surface
+  reads glassier as it nears the wallpaper. Both scale with `backdropStrength`
+  (the Settings "Glass strength" slider).
 
 ## Liquid Glass in depth
 
@@ -76,6 +80,58 @@ top-to-bottom), so the legibility pass is entirely the caller's - the surface
 renders exactly what the spec carries and never substitutes its own. The default
 framework mapping supplies a sensible top-to-bottom darken; a host returning its
 own `.liquidGlass` from a backdrop resolver can replace it wholesale.
+
+## Notch fade
+
+Many notch apps shade their glass black where the panel meets the hardware notch,
+clearing toward the bottom so the wallpaper shows through lower down. Ask for that
+look with one line instead of a backdrop resolver:
+
+```swift
+configuration.chromeBehavior.glassShading = .notchFade
+```
+
+`NookGlassShading` has two cases:
+
+- **`.even`** (the default) - glass tinted toward the theme with a light darken that
+  eases toward the bottom, as described above.
+- **`.notchFade`** - clear glass shaded from black at the top edge to nothing at the
+  bottom. The top always matches the notch; the Settings "Glass strength" slider
+  scales how dark the fade is below it. Light chrome fades from white instead, so
+  dark text stays legible.
+
+The shading changes Liquid Glass only. Solid, Translucent, and Reduce Transparency
+look the same either way.
+
+### Collapsed, the fade goes solid
+
+The fade needs a panel to run down. Collapsed, a notch-fused chrome is the hardware
+notch's own height - 32 points on a 1728-wide built-in display - and roughly three
+quarters of its width sits behind the camera, so a gradient sized for the expanded
+panel shades nothing but the two small wings either side of it.
+
+So `.notchFade` paints the collapsed chrome the flat notch color instead - solid
+black, or white for light chrome - which is the look the fade was after in the first
+place: chrome indistinguishable from the hardware it sits in. The fade starts when
+there is a panel tall enough to show it. The chrome re-resolves its backdrop on every
+expand and collapse, so the two swap as it moves; nothing is re-resolved on a hide,
+so no repaint lands under a panel that is fading out.
+
+A fade sized for the tall chrome would look wrong squeezed into a small companion
+pill - black at its top, clear at its bottom. So under `.notchFade`, companions that
+inherit the *expanded* chrome's backdrop get the same clear glass with a light, even
+tint instead, scaled by the same strength. Collapsed there is no fade to squeeze, so
+they go back to inheriting the chrome and the pill beside it matches it. To decide
+that yourself, set `chromeBehavior.companionBackdrop`, a resolver like `backdrop`
+that returns what companions inherit (`nil` for the chrome's own). Companion content
+reads the same value as `\.nookChromeBackdrop`. At the engine level this is
+`Nook.companionBackdrop`.
+
+The gradient itself is public too, for a host resolver or a raw `Nook`:
+
+```swift
+.liquidGlass(.init(shading: .notchFade(.black, strength: preferences.backdropStrength)))
+```
 
 ### Real material vs the pre-Tahoe approximation
 
@@ -160,17 +216,136 @@ Settings style, is where the deeper customization lives:
 
 ```swift
 configuration.chromeBehavior = NookChromeBehavior(
-    backdrop: { preferences, scheme, reduceTransparency in
+    backdrop: { context in
         .liquidGlass(.init(tint: .blue, tintStrength: 0.22))
     }
 )
 ```
 
+The resolver is re-run on every expand and collapse and is told which chrome it is
+answering for, so a host can shape the collapsed pill and the expanded panel
+separately rather than shading one gradient to suit both:
+
+```swift
+configuration.chromeBehavior.backdrop = { context in
+    context.isExpanded ? .liquidGlass(.init(shading: .notchFade())) : .solid(.black)
+}
+```
+
+See [Backdrop resolver](/guides/chrome-customization/#backdrop-resolver) for the
+whole `NookBackdropContext`.
+
+## Backdrops beyond the three styles
+
+The Settings styles map to three `NookBackdrop` cases, but the engine paints more.
+Return any of these from a backdrop resolver, or set `Nook.backdrop` directly on a
+`NookSurface`-only host:
+
+```swift
+// Linear, radial (radii in points), elliptical (radii as fractions of the frame),
+// or angular. Elliptical keeps its look as the chrome grows from pill to panel.
+.gradient(.linear(Gradient(colors: [.indigo, .black])))
+.gradient(.elliptical(Gradient(colors: [.teal, .black]), center: .top, endRadiusFraction: 1))
+.gradient(.angular(Gradient(colors: [.pink, .orange, .pink])))
+
+// A SwiftUI MeshGradient (macOS 15). A mesh whose points or colors do not match its
+// width * height paints only its background.
+.meshGradient(MeshGradient(width: 2, height: 2,
+                           points: [[0, 0], [1, 0], [0, 1], [1, 1]],
+                           colors: [.purple, .indigo, .black, .black]))
+
+// Anything else: an image, a Shader, an animated view. The id stands in for the view
+// in equality, so give a different look a different id.
+.custom(.init(id: "aurora") { context in
+    context.reduceTransparency ? AnyView(Color.black) : AnyView(AuroraView())
+})
+```
+
+The custom view fills the surface's frame and is clipped to the outline;
+`context.shape` is that outline, for a view that wants to trace its own edge.
+
+The existing cases also expose the internals they used to fix:
+
+| Knob | What it does | Default |
+|---|---|---|
+| `Vibrancy.darkenColor` | the color of the legibility overlay, so a light chrome can lighten instead of darken | black |
+| `LiquidGlass.variant` | `.regular` or `.clear` glass on macOS 26 and later | `.regular` |
+| `LiquidGlass.fallbackMaterial` | the material the pre-Tahoe approximation starts from | `.hudWindow` |
+| `LiquidGlass.highlightColor` | the approximation's sheen and rim color | white |
+| `LiquidGlass.rimWidth` | the approximation's rim width; 0 keeps the sheen only | 1 |
+
+Apple pairs `.clear` glass with a dimming layer behind content; the glass's
+`shading` is where that goes. `Glass.interactive()` is not exposed: the chrome is a
+surface, not a control.
+
+Reduce Transparency works per case. The surface paints vibrancy, solid, and Liquid
+Glass exactly as given (the framework mapping swaps them for a solid fill, as
+above). Gradients and meshes are painted with every color fully opaque while
+Reduce Transparency is on, hues kept, so a fade to `.clear` becomes a fade to
+black. A custom backdrop is the host's view, so it decides: read
+`context.reduceTransparency` and paint something opaque.
+
+## Theme backdrops
+
+A [theme](/guides/theming/) can describe the backdrop for each surface style the
+person can pick, as data a theme file can hold:
+
+```json
+"backdrops": {
+  "solid": { "kind": "linearGradient", "stops": ["#101014", "#000000"], "start": "top", "end": "bottom" },
+  "translucent": { "kind": "vibrancy", "material": "hudWindow", "darken": { "dark": 0.5, "light": 0.1 }, "darkenColor": "white" },
+  "liquidGlass": { "kind": "liquidGlass", "tint": "accent", "tintStrength": 0.3, "variant": "clear",
+                   "shading": { "stops": [{ "black": 0.3 }, { "black": 0.05 }] } },
+  "glassShading": "notchFade"
+}
+```
+
+```swift
+var theme = NookTheme()
+theme.backdrops.solid = .radialGradient(.init(gradient: NookGradientSpec(colors: ["#1A1030", "#000000"]), center: .top))
+theme.backdrops.translucent = .vibrancy(.init(material: .hudWindow, darken: 0.4))
+theme.backdrops.glassShading = .notchFade
+```
+
+The kinds are `framework` (the mapping above), `solid`, `vibrancy` (with
+`darkenColor`), `liquidGlass` (with `variant`, `fallbackMaterial`, `highlightColor`,
+and `rimWidth`), `linearGradient`, `radialGradient`, `ellipticalGradient`,
+`angularGradient`, `mesh`, and `custom`. A style the theme leaves out uses the
+framework's mapping. Colors resolve for the chrome's appearance, so `"accent"` and
+`{"dark": ..., "light": ...}` work here too.
+
+- The person's backdrop strength scales a vibrancy darken and a glass tint and
+  shading unless the description sets `"scalesWithStrength": false`.
+- Under Reduce Transparency a vibrancy or glass description gives way to the
+  framework's solid fill. Gradients and meshes are painted opaque by the surface.
+- A theme's backdrop is painted in both the collapsed and expanded states; use a
+  `chromeBehavior.backdrop` resolver for one that differs between them. A host
+  resolver always wins over the theme.
+- `glassShading` shades the framework's own Liquid Glass while the host's
+  `chromeBehavior.glassShading` is left at `.even`.
+- A kind this build does not know is read with its `fallback`, so a theme written by a
+  newer build still opens.
+
+A theme file cannot hold a view, so a custom backdrop is named, and the host
+supplies the view:
+
+```json
+"liquidGlass": { "kind": "custom", "id": "com.example.aurora", "fallback": { "kind": "framework" } }
+```
+
+```swift
+configuration.themeBackdrops["com.example.aurora"] = { context in
+    .custom(.init(id: "com.example.aurora") { _ in AuroraView() })
+}
+```
+
+With nothing registered under the id, the fallback is painted.
+
 ## See also
 
-- [Theming](/guides/theming/) - the palette resolver and `NookResolvedTheme`
-  slots that pair with the surface material.
+- [Theming](/guides/theming/) - `NookTheme`, its palette, and the backdrops it
+  describes.
 - `Sources/NookSurface/NookBackdrop.swift` - the `NookBackdrop` and `LiquidGlass`
   types, the source of truth for the knobs.
 - `Sources/NookKit/App/NookBackdropMapping.swift` - how a style, color scheme,
-  and Reduce Transparency map to a backdrop.
+  Reduce Transparency, and the chrome's state map to a backdrop.

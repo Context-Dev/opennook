@@ -59,7 +59,7 @@ extension AppCoordinator {
                 setUserInitiatedOpen(false)
         }
 
-        surface.staysExpandedOnHoverExit = appState.keepNookOpen
+        projectStaysExpanded()
         await surface.expand(on: nil)
 
         guard let timeout = presentation.unattendedTimeout,

@@ -20,7 +20,10 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     @State private var compactHoverAdmission = NookCompactHoverAdmission()
     @State private var trackedExpandedSize: CGSize = .zero
     @State private var ambientColor: Color?
+    @State private var rimColor: Color?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
     init(nook: Nook<Expanded, CompactLeading, CompactTrailing>) {
         self.nook = nook
@@ -46,10 +49,36 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// see ``NookContentInsets/expanded(form:topCornerRadius:bottomCornerRadius:chromeSafeAreaInset:)``.
     private var contentInsets: NookContentInsets {
         guard nook.state == .expanded else { return .zero }
+        let style = nook.style
+        // A style that sets its own floating radii gets insets measured from them. One that
+        // does not keeps the historical floating formula, so its reported insets are
+        // unchanged.
+        if isFloating,
+            style.floatingExpandedTopCornerRadius != nil || style.floatingExpandedBottomCornerRadius != nil
+        {
+            let radii = style.resolvedFloatingExpandedRadii
+            return NookContentInsets.floatingExpanded(
+                topCornerRadius: radii.top,
+                bottomCornerRadius: radii.bottom,
+                chromeSafeAreaInsets: expandedContentInsets
+            )
+        }
         return NookContentInsets.expanded(
             form: nook.layoutForm,
-            topCornerRadius: nook.style.topCornerRadius,
-            bottomCornerRadius: nook.style.bottomCornerRadius,
+            topCornerRadius: style.topCornerRadius,
+            bottomCornerRadius: style.bottomCornerRadius,
+            chromeSafeAreaInsets: expandedContentInsets
+        )
+    }
+
+    /// Where the hardware notch falls in the host's expanded view, read through
+    /// ``EnvironmentValues/nookNotchCutout``. `.none` in the floating form and whenever the
+    /// surface is not expanded.
+    private var notchCutout: NookNotchCutout {
+        guard nook.state == .expanded else { return .none }
+        return NookNotchCutout.expanded(
+            form: nook.layoutForm,
+            notchSize: nook.notchSize,
             chromeSafeAreaInsets: expandedContentInsets
         )
     }
@@ -59,19 +88,21 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     }
 
     private var compactCornerRadii: (top: CGFloat, bottom: CGFloat) {
-        compactGeometry.cornerRadii
+        (top: nook.style.compactTopCornerRadius, bottom: nook.style.compactBottomCornerRadius)
     }
 
     /// Floating panels use convex corners - a card when expanded, a capsule when
-    /// compact (radius = half the pill height). No notch ears to fuse, so the same
-    /// radius applies to all four corners.
-    private var floatingExpandedRadius: CGFloat { expandedCornerRadii.bottom }
-    private var floatingCompactRadius: CGFloat { compactCornerRadii.top }
+    /// compact (radius = half the pill height) unless the style says otherwise. No notch
+    /// ears to fuse, so by default the same radius applies to all four corners.
+    private var floatingExpandedRadii: (top: CGFloat, bottom: CGFloat) { nook.style.resolvedFloatingExpandedRadii }
+    private var floatingCompactRadius: CGFloat {
+        nook.style.resolvedFloatingCompactRadius(pillHeight: nook.notchSize.height)
+    }
 
     /// Vertical gap that drops the floating panel clear of the menu bar. Zero in notch
     /// mode, where the chrome is meant to sit flush against the top edge.
     private var floatingTopInset: CGFloat {
-        compactGeometry.topInset
+        isFloating ? nook.menubarHeight + 8 : 0
     }
 
     private var minWidth: CGFloat {
@@ -83,14 +114,16 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
 
     private var topCornerRadius: CGFloat {
         if isFloating {
-            return nook.state == .expanded ? floatingExpandedRadius : floatingCompactRadius
+            return nook.state == .expanded ? floatingExpandedRadii.top : floatingCompactRadius
         }
         return nook.state == .expanded ? expandedCornerRadii.top : compactCornerRadii.top
     }
 
     private var bottomCornerRadius: CGFloat {
+        // A peeking pill rounds its grown bottom the same way in both forms.
+        if nook.state == .compact, nook.isPeeking { return nook.style.peekBottomCornerRadius }
         if isFloating {
-            return nook.state == .expanded ? floatingExpandedRadius : floatingCompactRadius
+            return nook.state == .expanded ? floatingExpandedRadii.bottom : floatingCompactRadius
         }
         return nook.state == .expanded ? expandedCornerRadii.bottom : compactCornerRadii.bottom
     }
@@ -117,6 +150,18 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// `.fixedSize()` doesn't actually collapse to 0×0 when wrapped in a max-frame. Result:
     /// hovering in the empty space below a compact nook triggers the hover-grow animation.
     /// Hit-testing the same `NookShape` we render confines hover to the visible chrome.
+    ///
+    /// Companion surfaces are an overlay applied *after* the clip and the content shape, so
+    /// they are neither clipped to the chrome nor folded into its hover region; they report
+    /// their own hover, which the nook combines with the chrome's (see
+    /// `Nook+Companions.swift`). Applied *before* the offset and the floating inset, so they
+    /// move with the chrome. The rim glow's line sits inside the compositing group, where
+    /// the clip turns a centered stroke into an inner edge; its halo sits behind the
+    /// clipped chrome, where it can spill past the edge.
+    ///
+    /// Hover is admitted against the chrome's logical geometry (see ``handleHover(_:)``), so
+    /// the spring's presentation tail after a collapse cannot read as a fresh hover. The
+    /// attached accessory hangs below the chrome in the same hover region.
     var body: some View {
         VStack(spacing: 0) {
             notchChrome
@@ -135,18 +180,34 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
         }
         .fixedSize()
         .onContinuousHover(coordinateSpace: .global, perform: handleHover)
+        // Floating mode drops the panel below the menu bar; notch mode keeps it
+        // flush to the top edge (inset 0). Applied outside the clipped chrome so it
+        // shifts the whole shape without distorting it or the hover region.
         .padding(.top, floatingTopInset)
+        // Read above the companion overlay, so compact, expanded, and companion content
+        // can all light the rim.
+        .onPreferenceChange(NookRimGlowPreferenceKey.self) { color in
+            withAnimation(Self.rimAnimation) { rimColor = color }
+        }
         .animation(nook.effectiveConversionAnimation, value: nook.state)
+        .animation(nook.effectivePeekAnimation, value: nook.isPeeking)
         .animation(nook.effectiveConversionAnimation, value: [compactLeadingWidth, compactTrailingWidth])
+        .environment(\.nookHasKeyboardFocus, nook.hasKeyboardFocus)
+        .onChange(of: reduceMotion, initial: true) { _, reduceMotion in
+            nook.sharedElements.systemReduceMotion = reduceMotion
+        }
     }
 
     private var notchChrome: some View {
         notchContent()
-            .background { notchBackdrop() }
+            .background { NookBackdropFill(backdrop: nook.backdrop, shape: notchShape) }
+            .overlay { rimLine() }
             .overlay { feedbackOverlay() }
             .environment(\.nookCompactActivity, compactActivityAction)
             .compositingGroup()
             .clipShape(notchShape)
+            .background { rimHalo() }
+            .background { chromeShadow() }
             .contentShape(notchShape)
             .onChange(of: compactHoverMeasurementsReady) { wasReady, isReady in
                 reconcilePendingCompactHover(from: wasReady, to: isReady)
@@ -155,32 +216,17 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                 guard state != .compact else { return }
                 compactHoverAdmission.ended()
             }
+            // A click opens the pill when hover no longer does, or while it peeks. Otherwise
+            // the gesture is off and only the content's own gestures run, as before.
+            .gesture(
+                TapGesture().onEnded { nook.handleChromeClick() },
+                including: nook.opensOnClick ? .all : .subviews
+            )
+            .overlay { companionLayer() }
             .offset(x: xOffset)
-        // Floating mode drops the panel below the menu bar; notch mode keeps it
-        // flush to the top edge (inset 0). Applied outside the clipped chrome so it
-        // shifts the whole shape without distorting it or the hover region.
     }
 
-    /// Peripheral cue overlay. Sits above backdrop+content but inside the compositing group,
-    /// so the shimmer stroke flattens with the chrome before the notch shape carves the visible
-    /// region - no edge gaps mid-bounce, no spillover beyond the arch.
-    private func feedbackOverlay() -> some View {
-        NookFeedbackOverlay(
-            event: nook.feedbackEvent,
-            form: nook.layoutForm,
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius,
-            reduceMotion: reduceMotion
-        )
-    }
-
-    private var notchShape: NookShape {
-        NookShape(
-            form: nook.layoutForm,
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius
-        )
-    }
+    // MARK: Hover admission
 
     /// Admit pointer activity against logical geometry, not the spring's presentation tail.
     /// `.global` is panel-local here because `initializeWindow` edge-pins a full-panel
@@ -200,7 +246,7 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                 admitHover(at: eventPoint)
             case .ended:
                 compactHoverAdmission.ended()
-                nook.updateHoverState(false)
+                nook.updateChromeHoverState(false)
         }
     }
 
@@ -210,7 +256,10 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
             notchSize: nook.notchSize,
             menubarHeight: nook.menubarHeight,
             leadingWidth: nook.disableCompactLeading ? 0 : compactLeadingWidth,
-            trailingWidth: nook.disableCompactTrailing ? 0 : compactTrailingWidth
+            trailingWidth: nook.disableCompactTrailing ? 0 : compactTrailingWidth,
+            notchCornerRadii: compactCornerRadii,
+            floatingCornerRadius: floatingCompactRadius,
+            outline: nook.style.outline
         )
     }
 
@@ -245,6 +294,10 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     private func admitHover(at panelLocation: CGPoint) {
         let isInsideInteractionRegion: Bool
         switch nook.state {
+            case .compact where nook.isPeeking:
+                // A peeking pill has grown below the compact geometry; the clipped content
+                // shape already confines hover to what is drawn.
+                isInsideInteractionRegion = true
             case .compact:
                 isInsideInteractionRegion =
                     compactHoverMeasurementsReady
@@ -254,24 +307,164 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
             case .hidden:
                 isInsideInteractionRegion = false
         }
-        nook.updateHoverState(true, withinInteractionRegion: isInsideInteractionRegion)
+        nook.updateChromeHoverState(isInsideInteractionRegion)
     }
 
-    private func notchBackdrop() -> some View {
-        NookBackdropView(backdrop: nook.backdrop, shape: notchShape)
+    /// Peripheral cue overlay. Sits above backdrop+content but inside the compositing group,
+    /// so the shimmer stroke flattens with the chrome before the notch shape carves the visible
+    /// region - no edge gaps mid-bounce, no spillover beyond the arch.
+    private func feedbackOverlay() -> some View {
+        NookFeedbackOverlay(
+            event: nook.feedbackEvent,
+            shape: notchShape,
+            reduceMotion: reduceMotion
+        )
+    }
+
+    private var notchShape: NookShape {
+        NookShape(
+            form: nook.layoutForm,
+            topCornerRadius: topCornerRadius,
+            bottomCornerRadius: bottomCornerRadius,
+            outline: nook.style.outline
+        )
+    }
+
+    /// The host's chrome shadow, behind the halo and the clipped chrome. Shares the rim's
+    /// top fade, so the notch form's shadow does not smear across the menu bar.
+    @ViewBuilder
+    private func chromeShadow() -> some View {
+        if let shadow = nook.chromeShadow {
+            NookChromeShadowView(shadow: shadow, shape: notchShape, topFadeHeight: rimTopFadeHeight)
+        }
+    }
+
+    // MARK: Rim glow
+
+    /// Fades the rim in and out, and between colors. Opacity only, so it is also right under
+    /// Reduce Motion.
+    private static var rimAnimation: Animation { .easeInOut(duration: 0.3) }
+
+    /// The rim color to draw: whatever content published, else the ambient wash when the
+    /// style follows it.
+    private var effectiveRimColor: Color? {
+        nook.rimGlowStyle.color(rimColor: rimColor, ambientColor: ambientColor)
+    }
+
+    private var rimRendering: NookRimGlowRendering {
+        NookRimGlowRendering.resolve(
+            style: nook.rimGlowStyle,
+            reduceMotion: reduceMotion,
+            increaseContrast: colorSchemeContrast == .increased,
+            reduceTransparency: reduceTransparency
+        )
+    }
+
+    /// The notch form's top band is fused with the menu bar and the hardware notch, so the
+    /// rim fades out across it and rises out of the menu bar instead of outlining it.
+    private var rimTopFadeHeight: CGFloat? {
+        isFloating ? nil : nook.notchSize.height
+    }
+
+    @ViewBuilder
+    private func rimLine() -> some View {
+        let rendering = rimRendering
+        if let color = effectiveRimColor, rendering.lineWidth > 0, rendering.lineOpacity > 0 {
+            NookRimLine(shape: notchShape, color: color, rendering: rendering, topFadeHeight: rimTopFadeHeight)
+                .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder
+    private func rimHalo() -> some View {
+        let rendering = rimRendering
+        if let color = effectiveRimColor, rendering.drawsHalo {
+            NookRimHalo(
+                shape: notchShape,
+                color: color,
+                rendering: rendering,
+                topFadeHeight: rimTopFadeHeight
+            )
+            .transition(.opacity)
+        }
+    }
+
+    // MARK: Companion surfaces
+
+    /// Every companion, laid out around the chrome.
+    ///
+    /// The layer stays mounted with no companions, so the first one added is an insertion SwiftUI
+    /// can animate. Adding or removing a companion animates like any other change to the
+    /// surface: on the curve the change was made with, or the chrome's own if it was made
+    /// without one, and on the companion's presence curve if it sets one.
+    private func companionLayer() -> some View {
+        let companions = nook.companions
+        let conversionAnimation = nook.effectiveConversionAnimation
+        return NookCompanionLayerLayout(
+            bodyInset: isFloating ? 0 : topCornerRadius,
+            keepsSideRowsBelowTop: !isFloating
+        ) {
+            ForEach(companions) { surface in
+                companionItem(surface)
+                    .transition(companionTransition(for: surface))
+            }
+        }
+        .transaction(value: companions.map(\.id)) { transaction in
+            if transaction.animation == nil, !transaction.disablesAnimations {
+                transaction.animation = conversionAnimation
+            }
+        }
+    }
+
+    private func companionTransition(for surface: NookCompanionSurface) -> AnyTransition {
+        let transition = surface.presence.transition(edge: surface.anchor.edge, reduceMotion: reduceMotion)
+        guard let animation = surface.presence.animation else { return transition }
+        return transition.animation(animation)
+    }
+
+    private func companionItem(_ surface: NookCompanionSurface) -> some View {
+        let id = surface.id
+        return NookCompanionItemView(
+            surface: surface,
+            chromeState: nook.state,
+            backdrop: surface.backdrop.resolved(inheriting: nook.inheritedCompanionBackdrop),
+            chromeBackdrop: nook.inheritedCompanionBackdrop,
+            heightLimit: companionHeightLimit(for: surface),
+            reduceMotion: reduceMotion,
+            presenceAnimation: nook.effectiveConversionAnimation,
+            onHover: { hovering in nook.updateCompanionHoverState(id: id, hovering: hovering) },
+            onVisibilityRestriction: { restriction in
+                nook.noteCompanionVisibilityRestriction(id: id, restriction: restriction)
+            },
+            onExtent: { maxY in nook.noteCompanionExtent(id: id, maxY: maxY) }
+        )
+        .environment(\.nookScrollEdgeFade, nook.scrollEdgeFade)
+    }
+
+    /// A companion beside the compact pill is fitted to the pill's height, so it is no taller than
+    /// its neighbour and never reaches above the top of the screen. The expanded chrome is taller
+    /// than any companion size, and a companion below the chrome has room to hang.
+    private func companionHeightLimit(for surface: NookCompanionSurface) -> CGFloat? {
+        guard surface.anchor.edge != .below, nook.state != .expanded, nook.notchSize.height > 0 else {
+            return nil
+        }
+        return nook.notchSize.height
     }
 
     private func notchContent() -> some View {
         ZStack {
-            compactContent()
-                .fixedSize()
-                .offset(x: nook.state == .compact ? 0 : compactXOffset)
-                .frame(
-                    // Notch mode reserves the notch width while expanded so the
-                    // collapsed slots line up; a floating pill is content-driven.
-                    width: (nook.state == .compact || isFloating) ? nil : nook.notchSize.width,
-                    height: (nook.state == .compact && nook.isHovering) ? nook.menubarHeight : nook.notchSize.height
-                )
+            VStack(spacing: 0) {
+                compactContent()
+                    .fixedSize()
+                    .offset(x: nook.state == .compact ? 0 : compactXOffset)
+                    .frame(
+                        // Notch mode reserves the notch width while expanded so the
+                        // collapsed slots line up; a floating pill is content-driven.
+                        width: (nook.state == .compact || isFloating) ? nil : nook.notchSize.width,
+                        height: (nook.state == .compact && nook.isHovering) ? nook.menubarHeight : nook.notchSize.height
+                    )
+                peekRegion()
+            }
 
             expandedContent()
                 .fixedSize()
@@ -281,12 +474,67 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                 )
                 .offset(x: nook.state == .compact ? -compactXOffset : 0)
         }
-        .padding(
-            .horizontal,
-            nook.state == .compact ? compactGeometry.horizontalPadding : topCornerRadius
-        )
+        .padding(.horizontal, topCornerRadius)
         .fixedSize()
         .frame(minWidth: minWidth, minHeight: nook.notchSize.height)
+        .environment(\.nookChromeBackdrop, nook.backdrop)
+        .environment(\.nookChromeShape, notchShape)
+        .environment(\.nookSharedElements, nook.sharedElements)
+        // Moving shared elements draw over the content, inside the chrome's shape.
+        .overlayPreferenceValue(NookSharedElementRecordsKey.self) { records in
+            NookSharedElementLayer(records: records, coordinator: nook.sharedElements)
+        }
+    }
+
+    /// How the compact slots arrive and leave. The transaction's curve inside this view is the
+    /// conversion curve (see the `.animation(_:value:)` on `body`), so a slot that waits
+    /// waits on it.
+    private var compactTransition: NookContentTransitionPlan {
+        let configuration = nook.transitionConfiguration
+        return .plan(
+            insertion: configuration.compactContentTransition,
+            removal: configuration.compactContentRemoval,
+            surfaceAnimation: nook.effectiveConversionAnimation
+        )
+    }
+
+    /// How the peek content arrives and leaves, like ``compactTransition``. The pill grows on the
+    /// peek curve (see the `.animation(_:value:)` on `body`), so a peek that waits waits on it.
+    private var peekTransition: NookContentTransitionPlan {
+        let configuration = nook.transitionConfiguration
+        return .plan(
+            insertion: configuration.peekContentTransition,
+            removal: configuration.peekContentRemoval,
+            surfaceAnimation: nook.effectivePeekAnimation
+        )
+    }
+
+    /// The region the compact pill grows into below its slots while it peeks. Absent the rest
+    /// of the time, so a pill that never peeks lays out exactly as before.
+    @ViewBuilder
+    private func peekRegion() -> some View {
+        if nook.state == .compact, nook.isPeeking, let content = nook.peekContent {
+            let insets = nook.style.peekContentInsets
+            content
+                .frame(maxHeight: max(nook.style.peekMaxHeight, 0), alignment: .top)
+                .clipped()
+                .padding(.top, insets.top)
+                .padding(.bottom, insets.bottom)
+                .padding(.leading, insets.leading)
+                .padding(.trailing, insets.trailing)
+                .transition(peekTransition.anyTransition(axis: .vertical, anchor: .top))
+                .environment(\.nookSharedElementRegion, .peek)
+        }
+    }
+
+    /// How the expanded content arrives and leaves, like ``compactTransition``.
+    private var expandedTransition: NookContentTransitionPlan {
+        let configuration = nook.transitionConfiguration
+        return .plan(
+            insertion: configuration.expandedContentTransition,
+            removal: configuration.expandedContentRemoval,
+            surfaceAnimation: nook.effectiveConversionAnimation
+        )
     }
 
     private func compactContent() -> some View {
@@ -307,9 +555,7 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                         compactLeadingWidth = $0
                         hasMeasuredCompactLeading = true
                     }
-                    .transition(
-                        .blur(intensity: 6).combined(with: .scale(x: 0, anchor: .trailing)).combined(with: .opacity)
-                    )
+                    .transition(compactTransition.anyTransition(axis: .horizontal, anchor: .trailing))
             }
 
             // Notch mode: a gap exactly the notch width, so the leading/trailing slots
@@ -334,13 +580,12 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                         compactTrailingWidth = $0
                         hasMeasuredCompactTrailing = true
                     }
-                    .transition(
-                        .blur(intensity: 6).combined(with: .scale(x: 0, anchor: .leading)).combined(with: .opacity)
-                    )
+                    .transition(compactTransition.anyTransition(axis: .horizontal, anchor: .leading))
             }
         }
         .opacity(nook.compactContentOpacity)
         .frame(height: nook.notchSize.height)
+        .environment(\.nookSharedElementRegion, .compact)
         // `disableCompactLeading/Trailing` are construction-time `let`s on `Nook` -
         // they cannot change at runtime, so no `.onChange` reconciliation is needed.
         // Width values retain their last valid measurement while the slot views disappear.
@@ -354,11 +599,12 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                 nook.expandedContent
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .environment(\.nookContentInsets, contentInsets)
-                    .transition(
-                        .blur(intensity: 6).combined(with: .scale(y: 0.72, anchor: .top)).combined(with: .opacity)
-                    )
+                    .environment(\.nookNotchCutout, notchCutout)
+                    .environment(\.nookScrollEdgeFade, nook.scrollEdgeFade)
+                    .transition(expandedTransition.anyTransition(axis: .vertical, anchor: .top))
             }
         }
+        .environment(\.nookSharedElementRegion, .expanded)
         .frame(maxWidth: .infinity, alignment: .leading)
         .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: expandedContentInsets.top) }
         .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: expandedContentInsets.bottom) }
@@ -366,7 +612,7 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
         .safeAreaInset(edge: .trailing, spacing: 0) { Color.clear.frame(width: expandedContentInsets.trailing) }
         .background {
             if let ambientColor {
-                NookAmbientColorBackground(color: ambientColor)
+                NookAmbientColorBackground(color: ambientColor, wash: nook.ambientWash)
                     .transition(.opacity)
             }
         }

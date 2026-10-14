@@ -8,8 +8,9 @@
 import SwiftUI
 
 /// A host brand mark - builds the mark view at a requested size and color. The framework
-/// renders it in the top-bar leading cluster (when no `leadingIcon` is set), the About
-/// card, and (as a template image) the menu-bar status item.
+/// renders it in the top-bar leading cluster (when no `leadingIcon` is set), the default
+/// compact trailing slot, the placeholder home, the About card, and (as a template image)
+/// the menu-bar status item.
 ///
 /// `@Sendable @MainActor`: builds a SwiftUI view during main-actor rendering, carried by
 /// a `Sendable` ``NookHostBranding``.
@@ -37,15 +38,46 @@ public struct NookHostBranding: Sendable, Equatable {
 
     /// Replaces the OpenNook ``NookMark`` glyph wherever the chrome renders the brand
     /// mark - the top-bar leading cluster (when ``NookTopBarConfiguration/leadingIcon`` is
-    /// `nil`), the About card, and the menu-bar status icon. `nil` (the default) keeps the
-    /// OpenNook mark. Not part of ``Equatable`` (a closure can't be compared) - two
+    /// `nil`), the default compact trailing slot, the placeholder home, the About card, and
+    /// the menu-bar status icon. `nil` (the default) keeps the
+    /// OpenNook mark. Not part of `Equatable` (a closure can't be compared) - two
     /// brandings are equal when their strings match.
     public var mark: NookBrandMark?
 
-    public init(hostName: String = "Nook", hostTagline: String? = nil, mark: NookBrandMark? = nil) {
+    /// The menu-bar status item's icon, when it should differ from ``mark``. `nil` (the default)
+    /// draws ``mark`` there, or the OpenNook mark when that is `nil` too. Like the mark, it is
+    /// drawn as a template image, so the menu bar tints it for light and dark menu bars. Not part
+    /// of `Equatable`.
+    ///
+    /// ```swift
+    /// configuration.branding.menuBarIcon = NookHostBranding.symbol("sparkles")
+    /// configuration.branding.menuBarIcon = { size, _ in
+    ///     AnyView(Image("MenuIcon", bundle: .module).resizable().frame(width: size, height: size))
+    /// }
+    /// ```
+    public var menuBarIcon: NookBrandMark?
+
+    public init(
+        hostName: String = "Nook",
+        hostTagline: String? = nil,
+        mark: NookBrandMark? = nil,
+        menuBarIcon: NookBrandMark? = nil
+    ) {
         self.hostName = hostName
         self.hostTagline = hostTagline
         self.mark = mark
+        self.menuBarIcon = menuBarIcon
+    }
+
+    /// A mark or menu-bar icon drawn from the SF Symbol `name`, sized to the requested size.
+    public static func symbol(_ name: String) -> NookBrandMark {
+        { size, color in
+            AnyView(
+                Image(systemName: name)
+                    .font(.system(size: size, weight: .medium))
+                    .foregroundStyle(color)
+            )
+        }
     }
 
     /// Equality ignores ``mark`` (closures aren't comparable): two brandings are equal
@@ -59,45 +91,69 @@ public struct NookHostBranding: Sendable, Equatable {
     public static let `default` = NookHostBranding()
 
     /// Builds the brand mark view at the given size/color - the host's ``mark`` if set,
-    /// otherwise the framework ``NookMarkView`` at the supplied `strokeWidth`.
+    /// otherwise the framework ``NookMarkView``. The host mark fills a `size` square; the
+    /// framework mark is much wider than tall, so it's drawn ``frameworkMarkWidthScale``
+    /// times `size` wide in a frame `size` tall. `strokeWidth` is kept for compatibility
+    /// and ignored by the filled framework mark.
     @MainActor
     public func markView(size: CGFloat, strokeWidth: CGFloat, color: Color) -> AnyView {
         if let mark {
-            return mark(size, color)
+            return AnyView(mark(size, color).frame(width: size, height: size))
         }
-        return AnyView(NookMarkView(size: size, strokeWidth: strokeWidth, color: color))
+        return AnyView(
+            NookMarkView(size: size * Self.frameworkMarkWidthScale, strokeWidth: strokeWidth, color: color)
+                .frame(height: size)
+        )
+    }
+
+    /// How many times a glyph `size` the framework mark is drawn wide, so it carries about
+    /// the visual weight of a square glyph at that size.
+    public static let frameworkMarkWidthScale: CGFloat = 2
+
+    /// The brand mark for a slot whose metric is the *framework* mark's width - the compact
+    /// trailing slot and the placeholder home. With no host ``mark`` this is the OpenNook
+    /// mark exactly as those slots always drew it, `frameworkWidth` wide; a host mark gets the
+    /// matching square, `frameworkWidth / frameworkMarkWidthScale` on a side, the same weight
+    /// ``markView(size:strokeWidth:color:)`` gives it beside the framework mark elsewhere.
+    @MainActor
+    func markView(frameworkWidth: CGFloat, strokeWidth: CGFloat, color: Color) -> AnyView {
+        guard mark != nil else {
+            return AnyView(NookMarkView(size: frameworkWidth, strokeWidth: strokeWidth, color: color))
+        }
+        return markView(size: frameworkWidth / Self.frameworkMarkWidthScale, strokeWidth: strokeWidth, color: color)
     }
 }
 
 #if canImport(AppKit)
-import AppKit
+    import AppKit
 
-public extension NookHostBranding {
-    /// Renders the brand mark into a template `NSImage` for the menu-bar status item - 
-    /// the host's ``mark`` if set, otherwise the framework mark.
-    @MainActor
-    func menuBarTemplateImage(size: CGFloat = 14) -> NSImage? {
-        guard let mark else {
-            return NookMarkView.makeTemplateImage(size: size)
+    extension NookHostBranding {
+        /// Renders the menu-bar status item's icon into a template `NSImage` - the host's
+        /// ``menuBarIcon`` if set, then its ``mark``, otherwise the framework mark, drawn
+        /// ``frameworkMarkWidthScale`` times `size` wide.
+        @MainActor
+        public func menuBarTemplateImage(size: CGFloat = 14) -> NSImage? {
+            guard let icon = menuBarIcon ?? mark else {
+                return NookMarkView.makeTemplateImage(size: size * Self.frameworkMarkWidthScale)
+            }
+            let renderer = ImageRenderer(content: icon(size, .primary))
+            renderer.scale = 2
+            guard let image = renderer.nsImage else { return nil }
+            image.isTemplate = true
+            return image
         }
-        let renderer = ImageRenderer(content: mark(size, .primary))
-        renderer.scale = 2
-        guard let image = renderer.nsImage else { return nil }
-        image.isTemplate = true
-        return image
     }
-}
 #endif
 
 private struct NookHostBrandingKey: EnvironmentKey {
     static let defaultValue: NookHostBranding = .default
 }
 
-public extension EnvironmentValues {
+extension EnvironmentValues {
     /// Host branding (``NookHostBranding``) injected by the expanded router so any
     /// framework chrome view can read it from the environment instead of taking it
     /// through every init in the path.
-    var nookHostBranding: NookHostBranding {
+    public var nookHostBranding: NookHostBranding {
         get { self[NookHostBrandingKey.self] }
         set { self[NookHostBrandingKey.self] = newValue }
     }

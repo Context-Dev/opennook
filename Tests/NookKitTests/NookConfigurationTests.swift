@@ -276,47 +276,19 @@ final class NookConfigurationTests: XCTestCase {
         _ = configuration.settings?()
     }
 
-    func testBuiltInSettingsAreFullyVisibleByDefault() {
-        let builtInSettings = NookConfiguration().builtInSettings
+}
 
-        XCTAssertTrue(builtInSettings.hiddenItems.isEmpty)
-        XCTAssertNil(builtInSettings.onResetAllSettings)
-        XCTAssertTrue(NookBuiltInSettingsItem.allCases.allSatisfy(builtInSettings.shows))
+/// The built-in Settings screen's groups: all shown by default, and each one hideable.
+final class NookSettingsGroupsTests: XCTestCase {
+    func testEveryGroupIsShownByDefault() {
+        XCTAssertEqual(NookConfiguration().settingsGroups, .all)
+        XCTAssertEqual(NookSettingsGroups.all, [.appearance, .display, .shortcut, .data, .about])
     }
 
-    func testBuiltInSettingsCanHideOnlyHostSelectedItems() {
+    func testAGroupCanBeLeftOut() {
         var configuration = NookConfiguration()
-        configuration.builtInSettings.hiddenItems = [.theme, .surface]
-
-        XCTAssertFalse(configuration.builtInSettings.shows(.theme))
-        XCTAssertFalse(configuration.builtInSettings.shows(.surface))
-        XCTAssertTrue(configuration.builtInSettings.shows(.layout))
-        XCTAssertTrue(configuration.builtInSettings.shows(.accent))
-        XCTAssertTrue(configuration.builtInSettings.showsAppearanceSection)
-    }
-
-    func testBuiltInSettingsAcceptTaskOrientedGroups() {
-        let groups = [
-            NookSettingsGroup(
-                id: "actions",
-                title: "Actions",
-                items: [.hostSection("host.actions")]
-            ),
-            NookSettingsGroup(
-                id: "appearance",
-                title: "Appearance",
-                items: [.builtIn(.layout), .builtIn(.accent)]
-            ),
-        ]
-
-        let configuration = NookBuiltInSettingsConfiguration(
-            hiddenItems: [.hapticFeedback],
-            groups: groups,
-            initiallyExpandedGroupIDs: ["actions"]
-        )
-
-        XCTAssertEqual(configuration.groups, groups)
-        XCTAssertEqual(configuration.initiallyExpandedGroupIDs, ["actions"])
-        XCTAssertEqual(configuration.hiddenItems, [.hapticFeedback])
+        configuration.settingsGroups.remove(.data)
+        XCTAssertFalse(configuration.settingsGroups.contains(.data))
+        XCTAssertTrue(configuration.settingsGroups.contains(.shortcut))
     }
 }

@@ -53,7 +53,7 @@ struct NookAttachedAccessoryHost: View {
             .padding(.trailing, hasContent ? style.contentInsets.trailing : 0)
             .background {
                 if hasContent {
-                    NookBackdropView(backdrop: backdrop, shape: shape)
+                    NookBackdropView(backdrop, in: shape)
                 }
             }
             .clipShape(shape)

@@ -14,7 +14,7 @@ import NookKit
 /// Enqueue ``NookActivity`` values; the queue drains them one at a time, highest
 /// ``NookActivityPriority/high`` first, collapsing any that share a `coalescingKey`.
 /// Presenting an activity briefly takes over the expanded surface through a
-/// ``NookSurfacePresenting`` - typically `AppCoordinator`, supplied via
+/// `NookSurfacePresenting` - typically `AppCoordinator`, supplied via
 /// `NookConfiguration.onReady`:
 ///
 /// ```swift
@@ -78,10 +78,26 @@ public final class NookActivityQueue: ObservableObject {
     }
 
     /// Adds an activity. If it carries a `coalescingKey`, any pending peer with the same
-    /// key is dropped first (keep-latest).
+    /// key is dropped first (keep-latest), and a card with the same key already on screen is
+    /// updated in place instead: its text, symbol, and tint change for the rest of its dwell,
+    /// without the card leaving and coming back.
     public func enqueue(_ activity: NookActivity) {
         if let key = activity.coalescingKey {
             pending.removeAll { $0.coalescingKey == key }
+            if let shown = current, shown.coalescingKey == key {
+                // The shown card's id stays, so the host does not replay its transition.
+                current = NookActivity(
+                    id: shown.id,
+                    coalescingKey: key,
+                    priority: activity.priority,
+                    title: activity.title,
+                    subtitle: activity.subtitle,
+                    systemImage: activity.systemImage,
+                    tint: activity.tint,
+                    dwell: activity.dwell
+                )
+                return
+            }
         }
         pending.append(activity)
         startDrainingIfNeeded()
@@ -123,7 +139,7 @@ public final class NookActivityQueue: ObservableObject {
 
     /// Stops all draining, joins the drain task, and releases any held surface token.
     ///
-    /// Unlike ``suspend()`` - which detaches the drain task and returns immediately - 
+    /// Unlike ``suspend()`` - which detaches the drain task and returns immediately -
     /// `quiesce()` *awaits* the drain task to fully unwind, then hands back any
     /// in-flight surface claim. After it returns the queue is provably no longer
     /// touching the surface, so the owning module is safe to switch away or unload.
@@ -186,6 +202,20 @@ public final class NookActivityQueue: ObservableObject {
             activeToken = token
             current = activity
             await sleep(activity.dwell)
+            // The next waiting card takes over the same claim, so the nook stays open between
+            // cards instead of collapsing and opening again. This needs a presenter that can
+            // move a claim's end (`endTransientPresentation(_:after:)`); the moved end also
+            // releases the claim on its own should this loop stop mid-dwell. A presenter that
+            // cannot, or a person who starts using the nook, ends the claim as before.
+            while !isSuspended, !Task.isCancelled, !presenter.isUserEngaged, let next = nextToPresent() {
+                guard await presenter.endTransientPresentation(token, after: next.dwell + Self.chainedEndMargin)
+                else { break }
+                // Cancelled while the end moved: look again.
+                guard let index = pending.firstIndex(where: { $0.id == next.id }) else { continue }
+                pending.remove(at: index)
+                current = next
+                await sleep(next.dwell)
+            }
             // Keep `current` set across the `endTransientPresentation` await, then clear
             // it - this holds the activity card on screen while the surface hands the
             // claim back.
@@ -215,10 +245,17 @@ public final class NookActivityQueue: ObservableObject {
         pending.append(activity)
     }
 
+    /// The activity ``dequeue()`` would return next, left in place.
+    private func nextToPresent() -> NookActivity? {
+        guard let maxPriority = pending.map(\.priority).max() else { return nil }
+        return pending.first { $0.priority == maxPriority }
+    }
+
     /// Removes and returns the highest-priority pending activity, FIFO within a priority.
     private func dequeue() -> NookActivity? {
         guard let maxPriority = pending.map(\.priority).max(),
-              let index = pending.firstIndex(where: { $0.priority == maxPriority }) else {
+            let index = pending.firstIndex(where: { $0.priority == maxPriority })
+        else {
             return nil
         }
         return pending.remove(at: index)
@@ -248,19 +285,23 @@ public final class NookActivityQueue: ObservableObject {
     /// while the user is actively engaging the surface.
     private static let engagementPollInterval: Duration = .milliseconds(200)
 
+    /// How far past a chained card's dwell its claim's scheduled end sits, so the loop always
+    /// ends or extends the claim itself before the scheduled end would.
+    private static let chainedEndMargin: Duration = .seconds(2)
+
     /// How long the drain loop waits after a denied takeover before retrying. Keeps a
     /// surface contended by another presenter from spinning the loop.
     private static let contentionBackoff: Duration = .milliseconds(150)
 }
 
-private extension NookActivityPriority {
+extension NookActivityPriority {
     /// Maps an activity's queue priority onto the surface-claim priority the arbiter
     /// ranks contending presenters by.
-    var surfacePriority: NookSurfacePriority {
+    fileprivate var surfacePriority: NookSurfacePriority {
         switch self {
-        case .low: return .ambient
-        case .normal: return .normal
-        case .high: return .urgent
+            case .low: return .ambient
+            case .normal: return .normal
+            case .high: return .urgent
         }
     }
 }

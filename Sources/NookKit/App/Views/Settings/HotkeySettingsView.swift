@@ -7,6 +7,98 @@
 
 import SwiftUI
 
+/// The global shortcut, "Stay expanded", haptic feedback, and, while the chrome theme has
+/// sounds the person may turn off, "Sounds" - the body of the built-in Settings screen's
+/// "Shortcut & nook" group, for a host that builds its own Settings screen.
+///
+/// Use it inside chrome content, which supplies the chrome's actions: "Stay expanded" runs
+/// ``NookChromeActions/toggleKeepOpen``, like the top bar's lock.
+///
+/// ```swift
+/// NookSettingsGroup("Shortcut & nook") { NookShortcutSettingsSection(appState: appState) }
+/// ```
+public struct NookShortcutSettingsSection: View {
+    @ObservedObject public var appState: AppState
+
+    @Environment(\.nookResolvedTheme) private var theme
+    @Environment(\.nookChromeMetrics) private var metrics
+    @Environment(\.nookChromeActions) private var actions
+    @Environment(\.nookChromeLabels) private var labels
+    @Environment(\.nookTheme) private var chromeTheme
+    @Environment(\.nookThemeTokens) private var themeTokens
+
+    public init(appState: AppState) {
+        self.appState = appState
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: metrics.settingsGroupSpacing) {
+            SettingsShortcutRow(appState: appState)
+            if !appState.hotkeyRegistrationFailures.keys.filter({ $0 != NookHotkeyIDs.toggle }).isEmpty {
+                SettingsHotkeyFailureRow(appState: appState)
+            }
+            NookOpeningSettingsRows(appState: appState)
+            SettingActionLine(
+                icon: appState.keepNookOpen ? "pin.fill" : "pin",
+                title: labels.shortcut.stayExpandedTitle,
+                detail: appState.keepNookOpen
+                    ? labels.shortcut.stayExpandedOn
+                    : labels.shortcut.stayExpandedOff,
+                accent: theme.accent,
+                action: actions.toggleKeepOpen
+            )
+            SettingActionLine(
+                icon: appState.appearancePreferences.hapticFeedbackEnabled ? "hand.tap.fill" : "hand.tap",
+                title: labels.shortcut.hapticTitle,
+                detail: appState.appearancePreferences.hapticFeedbackEnabled
+                    ? labels.shortcut.hapticOn
+                    : labels.shortcut.hapticOff,
+                accent: theme.accent,
+                action: toggleHapticFeedback
+            )
+            if showsSoundsRow {
+                SettingActionLine(
+                    icon: soundsEnabled ? "speaker.wave.2.fill" : "speaker.slash",
+                    title: labels.shortcut.soundsTitle,
+                    detail: soundsEnabled ? labels.shortcut.soundsOn : labels.shortcut.soundsOff,
+                    accent: theme.accent,
+                    action: toggleSounds
+                )
+            }
+        }
+    }
+
+    private var soundsEnabled: Bool {
+        appState.appearancePreferences.soundsEnabled
+    }
+
+    /// The "Sounds" row shows while the theme has sounds and lets the person turn them off -
+    /// and also while they are off, so a person who turned them off under another theme can
+    /// always turn them back on.
+    private var showsSoundsRow: Bool {
+        Self.showsSoundsRow(theme: chromeTheme, tokens: themeTokens, soundsEnabled: soundsEnabled)
+    }
+
+    static func showsSoundsRow(theme: NookTheme, tokens: NookResolvedTokens, soundsEnabled: Bool) -> Bool {
+        tokens.hasSounds && (theme.allowsUserSoundToggle || !soundsEnabled)
+    }
+
+    private func toggleSounds() {
+        var prefs = appState.appearancePreferences
+        prefs.soundsEnabled.toggle()
+        appState.replaceAppearancePreferences(prefs)
+    }
+
+    /// Flip the haptic preference and fire one pulse on the way *on* so the user feels
+    /// what they just enabled. Off doesn't pulse - silence is its whole point.
+    private func toggleHapticFeedback() {
+        var prefs = appState.appearancePreferences
+        prefs.hapticFeedbackEnabled.toggle()
+        appState.replaceAppearancePreferences(prefs)
+        NookHaptics.confirm(enabled: prefs.hapticFeedbackEnabled)
+    }
+}
+
 /// Settings row for the global show/hide hotkey. Tap the shortcut to record a new one:
 /// the next modifier + key combination is validated and registered by `AppCoordinator`,
 /// then persisted via `AppState`. Escape cancels without changing the active shortcut.
@@ -18,6 +110,8 @@ struct SettingsShortcutRow: View {
     @Environment(\.nookChromeTypography) private var typography
     @Environment(\.nookChromeMetrics) private var metrics
     @Environment(\.nookHostBranding) private var branding
+    @Environment(\.nookChromeActions) private var actions
+    @Environment(\.nookChromeLabels) private var labels
 
     init(appState: AppState) {
         self.appState = appState
@@ -32,31 +126,29 @@ struct SettingsShortcutRow: View {
                 .frame(width: metrics.settingsIconWidth)
 
             VStack(alignment: .leading, spacing: metrics.settingsTextSpacing) {
-                Text("Show \(branding.hostName)")
+                Text(labels.shortcut.showHost(branding.hostName))
                     .font(typography.settingsRowTitle)
                     .foregroundStyle(theme.primaryLabel.opacity(metrics.settingsTitleEmphasisOpacity))
                 if let feedbackMessage = recorder.feedbackMessage {
                     Text(feedbackMessage)
                         .font(typography.settingsHint)
-                        .foregroundStyle(Color.orange)
+                        .foregroundStyle(theme.warning)
                 } else if let failure = appState.globalHotkeyRegistrationFailure {
-                    Text(failure.message)
+                    Text(labels.shortcut.unavailable(failure.combination))
                         .font(typography.settingsHint)
-                        .foregroundStyle(Color.orange)
+                        .foregroundStyle(theme.warning)
                 } else {
-                    Text(
-                        recorder.isRecording ? "Press a shortcut — Esc to cancel" : "Global shortcut — click to change"
-                    )
-                    .font(typography.settingsHint)
-                    .foregroundStyle(theme.tertiaryLabel)
+                    Text(recorder.isRecording ? labels.shortcut.recordingHint : labels.shortcut.changeHint)
+                        .font(typography.settingsHint)
+                        .foregroundStyle(theme.tertiaryLabel)
                 }
             }
 
             Spacer(minLength: 8)
 
-            Button(action: recorder.toggle) {
+            Button(action: toggleRecording) {
                 if recorder.isRecording {
-                    Text("Listening…")
+                    Text(labels.shortcut.listening)
                         .font(typography.settingsFieldLabel)
                         .foregroundStyle(theme.primaryLabel.opacity(metrics.settingsRecordingLabelOpacity))
                         .padding(.horizontal, metrics.settingsRecordingHorizontalPadding)
@@ -81,11 +173,20 @@ struct SettingsShortcutRow: View {
         .padding(.vertical, metrics.settingsRowVerticalPadding)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "Show \(branding.hostName) shortcut, "
-                + "currently \(appState.hotkey.displaySymbols.joined(separator: " "))"
+            labels.shortcut.rowAccessibilityLabel(host: branding.hostName, keys: appState.hotkey.displaySymbols)
         )
-        .accessibilityHint("Activates to record a new shortcut")
+        .accessibilityHint(labels.shortcut.rowAccessibilityHint)
         .onDisappear { recorder.stop() }
+    }
+
+    private func toggleRecording() {
+        if !recorder.isRecording {
+            // The recorder listens for key presses, which reach the nook only while it has
+            // the keyboard - not the case when the person came from another app without
+            // clicking.
+            actions.takeKeyboardFocus()
+        }
+        recorder.toggle()
     }
 }
 
@@ -97,8 +198,10 @@ struct SettingsShortcutRow: View {
 struct SettingsHotkeyFailureRow: View {
     @ObservedObject var appState: AppState
 
+    @Environment(\.nookResolvedTheme) private var theme
     @Environment(\.nookChromeTypography) private var typography
     @Environment(\.nookChromeMetrics) private var metrics
+    @Environment(\.nookChromeLabels) private var labels
 
     /// Failures for every shortcut except the show/hide toggle, sorted for stable order.
     private var staticFailures: [HotkeyRegistrationFailure] {
@@ -115,19 +218,19 @@ struct SettingsHotkeyFailureRow: View {
                     HStack(alignment: .center, spacing: metrics.settingsGroupSpacing) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(typography.settingsEmphasis)
-                            .foregroundStyle(Color.orange)
+                            .foregroundStyle(theme.warning)
                             .frame(width: metrics.settingsIconWidth)
                         VStack(alignment: .leading, spacing: metrics.settingsTextSpacing) {
                             Text(failure.shortcutName)
                                 .font(typography.settingsRowTitle)
-                            Text(failure.message)
+                            Text(labels.shortcut.unavailable(failure.combination))
                                 .font(typography.settingsHint)
-                                .foregroundStyle(Color.orange)
+                                .foregroundStyle(theme.warning)
                         }
                         Spacer(minLength: 8)
                     }
                     .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(failure.shortcutName) shortcut unavailable: \(failure.message)")
+                    .accessibilityLabel(labels.shortcut.failureAccessibilityLabel(failure))
                 }
             }
             .padding(.vertical, metrics.settingsRowVerticalPadding)

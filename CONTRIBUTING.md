@@ -36,16 +36,17 @@ drift between them.
   launch trampolines.
 - `Sources/NookComponents/` - opt-in add-ons (file shelf, activity queue,
   volume glyph). Apache-2.0.
-- `Examples/` - single-file demonstrations of the public API. Each example
-  is one `main.swift` showing one concept.
-- `Tests/` - `NookKitTests` and `NookComponentsTests`.
+- `Examples/` - demonstrations of the public API. Each example is one
+  `main.swift` showing one concept, except `PlaygroundNook`, whose model and
+  exporters live in the `PlaygroundNookCore` target so they can be tested.
+- `Tests/` - `NookKitTests`, `NookComponentsTests`, and `PlaygroundNookTests`.
 
 ## License headers
 
 CI enforces an SPDX header on every Swift file:
 
-- Files under `Sources/NookSurface/` (and the two `@testable`-importing test
-  files) must carry `SPDX-License-Identifier: MIT`.
+- Files under `Sources/NookSurface/` (and the test files that `@testable import`
+  it, listed in the CI job) must carry `SPDX-License-Identifier: MIT`.
 - Every other Swift file must carry `SPDX-License-Identifier: Apache-2.0`.
 
 See `.github/workflows/ci.yml` for the exact rule. If you add files, copy
