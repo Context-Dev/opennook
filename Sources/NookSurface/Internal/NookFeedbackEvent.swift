@@ -18,7 +18,7 @@ struct NookFeedbackEvent: Equatable {
     let startedAt: Date
     let effect: NookFeedback
     let duration: TimeInterval
-    let tint: Color
+    let style: NookFeedbackStyle
     let respectsReduceMotion: Bool
     /// When `true`, the overlay loops the animation indefinitely instead of fading to clear after
     /// one cycle. The host clears the event (e.g., when the nook expands) to stop the loop.
@@ -49,7 +49,7 @@ struct NookFeedbackEvent: Equatable {
             startedAt: date,
             effect: effect,
             duration: duration,
-            tint: tint,
+            style: style,
             respectsReduceMotion: respectsReduceMotion,
             repeats: repeats
         )

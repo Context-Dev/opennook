@@ -33,6 +33,9 @@ executables=(
   ActivityNook
   VolumeNook
   MultiNook
+  CompanionNook
+  PlaygroundNook
+  ShowcaseNook
 )
 
 echo "Building executables..."

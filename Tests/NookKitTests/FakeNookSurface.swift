@@ -28,6 +28,7 @@ final class FakeNookSurface: NookSurfaceDriving {
     private let hoveringSubject = CurrentValueSubject<Bool, Never>(false)
     private let dragSubject = CurrentValueSubject<Bool, Never>(false)
     private let layoutGraceSubject = CurrentValueSubject<Bool, Never>(false)
+    private let layoutFormSubject = CurrentValueSubject<NookChromeForm, Never>(.notch)
 
     var state: NookState { stateSubject.value }
     var statePublisher: AnyPublisher<NookState, Never> {
@@ -58,6 +59,16 @@ final class FakeNookSurface: NookSurfaceDriving {
         layoutGraceSubject.removeDuplicates().eraseToAnyPublisher()
     }
 
+    /// The layout the chrome resolved to. Settable so a test can drive the floating form
+    /// without a screen; the real surface recomputes it whenever it builds a window.
+    var layoutForm: NookChromeForm {
+        get { layoutFormSubject.value }
+        set { layoutFormSubject.send(newValue) }
+    }
+    var layoutFormPublisher: AnyPublisher<NookChromeForm, Never> {
+        layoutFormSubject.removeDuplicates().eraseToAnyPublisher()
+    }
+
     var onExpand: (@MainActor () -> Void)?
     var onCompact: (@MainActor () -> Void)?
     var onHide: (@MainActor () -> Void)?
@@ -67,7 +78,41 @@ final class FakeNookSurface: NookSurfaceDriving {
     var presentation: NookPresentation = .auto
     var chromeAppearance: NSAppearance?
     var backdrop: NookBackdrop = .solidBlack
+    var companionBackdrop: NookBackdrop?
+    var window: NSWindow? { nil }
+
+    /// Mirrors the real surface's keyboard focus: taken while visible, released on request or
+    /// when the surface leaves the expanded state.
+    private(set) var hasKeyboardFocus = false
+    private(set) var keyboardFocusRequests = 0
+
+    @discardableResult
+    func takeKeyboardFocus() -> Bool {
+        keyboardFocusRequests += 1
+        guard stateSubject.value != .hidden else { return false }
+        hasKeyboardFocus = true
+        return true
+    }
+
+    func releaseKeyboardFocus() {
+        hasKeyboardFocus = false
+    }
     var transitionConfiguration = NookTransitionConfiguration()
+    var style = NookConfiguration.defaultStyle
+    var hoverBehavior: NookHoverBehavior = []
+    var hoverIntent: NookHoverIntent = .standard
+    var peekContent: AnyView? {
+        didSet { if peekContent == nil { isPeeking = false } }
+    }
+    /// Mirrors the real surface: a peek is a way of being compact.
+    private(set) var isPeeking = false
+    /// Every `peek` and `endPeek` request, in order: `true` for a peek.
+    private(set) var peekRequests: [Bool] = []
+    var companions: [NookCompanionSurface] = []
+    var rimGlowStyle: NookRimGlowStyle = .standard
+    var scrollEdgeFade: NookScrollEdgeFade?
+    var chromeShadow: NookChromeShadow?
+    var ambientWash: NookAmbientWash = .standard
 
     /// Mirrors the real surface's `hasLiveWindow` - tests flip this to drive the
     /// coordinator's display-change-while-visible branch without mounting a real
@@ -84,19 +129,48 @@ final class FakeNookSurface: NookSurfaceDriving {
     func compact(on screen: NSScreen?) async { transition(to: .compact) }
     func hide() async { transition(to: .hidden) }
 
-    func playFeedback(_ effect: NookFeedback, tint: Color, duration: TimeInterval, repeats: Bool) {
-        feedbackCount += 1
+    /// Like the real surface: no peek content, or an expanded surface, means no peek; a hidden
+    /// surface shows its compact pill first.
+    func peek(on screen: NSScreen?) async {
+        peekRequests.append(true)
+        guard peekContent != nil, stateSubject.value != .expanded else { return }
+        if stateSubject.value == .hidden { transition(to: .compact) }
+        isPeeking = true
     }
 
     func noteCompactActivity() {
         compactActivityCount += 1
     }
 
+    func endPeek() async {
+        peekRequests.append(false)
+        isPeeking = false
+    }
+
+    /// The style of the last `playFeedback` request, as a color for a tint request.
+    private(set) var lastFeedbackStyle: NookFeedbackStyle?
+
+    func playFeedback(_ effect: NookFeedback, tint: Color, duration: TimeInterval, repeats: Bool) {
+        feedbackCount += 1
+        var style = NookFeedbackStyle.standard
+        style.color = tint
+        lastFeedbackStyle = style
+    }
+
+    func playFeedback(_ effect: NookFeedback, style: NookFeedbackStyle, duration: TimeInterval, repeats: Bool) {
+        feedbackCount += 1
+        lastFeedbackStyle = style
+    }
+
     /// Applies a state change, records it, and fires the matching lifecycle hook -
     /// mirroring the real surface, whose hooks fire on every distinct transition.
     private func transition(to newState: NookState) {
         guard newState != stateSubject.value else { return }
+        if newState != .expanded { hasKeyboardFocus = false }
+        // Like the real surface, the change is published while the peek still shows, and the
+        // peek ends right after: observers can tell an open from a peek.
         stateSubject.send(newState)
+        if newState != .compact { isPeeking = false }
         transitions.append(newState)
         switch newState {
             case .expanded: onExpand?()

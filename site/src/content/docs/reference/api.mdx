@@ -4,10 +4,10 @@ description: The public API surface of OpenNook, by module.
 ---
 
 OpenNook publishes its symbol-level DocC reference through
-[Swift Package Index](https://swiftpackageindex.com/athledev-labs/opennook),
+[Swift Package Index](https://swiftpackageindex.com/twinkling-reality/opennook),
 regenerated on each tagged release, at:
 
-[https://swiftpackageindex.com/athledev-labs/opennook/documentation](https://swiftpackageindex.com/athledev-labs/opennook/documentation)
+[https://swiftpackageindex.com/twinkling-reality/opennook/documentation](https://swiftpackageindex.com/twinkling-reality/opennook/documentation)
 
 The map below is the maintained index of the public surface, grouped by module,
 with the guide that teaches each piece and the source file that defines it. The
@@ -30,18 +30,112 @@ The one-line entry point. `import NookApp` re-exports `NookKit` and
 
 The app chrome layered over `NookSurface`.
 
-- **Registration** - `NookConfiguration`, `NookTopBarConfiguration`,
-  `NookBuiltInSettingsConfiguration`, `NookBuiltInSettingsItem`, and
-  `NookSettingsSection`. The
+- **Registration** - `NookConfiguration`, `NookTopBarConfiguration`. The
   host-app seam: home/compact content, theme, lifecycle hooks, chrome flags, the
-  shape/animation/width knobs, built-in Settings visibility, injected Settings
-  sections, and complete Settings replacement. See
+  shape/animation/width knobs (with `NookConfiguration.defaultStyle`, the
+  framework's own shape), and `setSettings(_:)`. See
   [Your first nook](/start/first-nook/) and
   [Settings chrome](/guides/settings-chrome/). Source:
   `Sources/NookKit/App/NookConfiguration.swift`.
-- **Theme** - `NookResolvedTheme`. The flat palette every chrome view reads,
-  including `accent` and `fontDesign`. See [Theming](/guides/theming/). Source:
-  `Sources/NookKit/App/NookResolvedTheme.swift`.
+- **Top bar** - `NookTopBarConfiguration.symbols` (`NookChromeSymbols`,
+  `\.nookChromeSymbols`): the lock, gear, breadcrumb, back, and module-switcher
+  glyphs; `leadingIconView` (`setLeadingIcon(_:)`): a view for the leading icon; and
+  `content` (`setContent(_:)`, `NookConfiguration.setTopBar(_:)`): a host bar built
+  from `NookTopBarContext` (with `NookTopBarContext.ModuleSwitcher`), which carries the
+  bar's state and the keep-open, Settings, back, and module-switching actions. See
+  [Chrome customization](/guides/chrome-customization/#replacing-the-top-bar). Source:
+  `Sources/NookKit/App/NookChromeSymbols.swift`,
+  `Sources/NookKit/App/NookTopBarContext.swift`.
+- **Opening** - `NookAppearancePreferences.openOnHover` (`NookOpenOnHover`),
+  `hoverDelay`, `externalDisplayHoverDelay`, and `peekDwell`, offered in Settings and
+  mapped to `hoverIntent`; `NookChromeBehavior.hoverIntent` fixes them in code;
+  `NookConfiguration.setPeek(_:)` gives a module a peek; and
+  `NookSurfaceClaim.presentation` (`NookSurfacePresentation`) with
+  `NookSurfacePresenting.endTransientPresentation(_:after:)` for claims that peek or
+  end on a schedule. See [Hover and peek](/guides/hover-and-peek/). Source:
+  `Sources/NookKit/App/NookAppearancePreferences.swift`,
+  `Sources/NookKit/App/NookSurfacePresenting.swift`.
+- **Live activities** - `NookLiveActivity` (with `Priority`, `Lifetime`, and
+  `Alert`), started through a module's `NookLiveActivities` (`NookLiveActivitiesKey`,
+  `\.nookLiveActivities`); `NookActivityCenter` (`NookModuleRegistry.liveActivities`)
+  orders them for the pill; `NookActivityPolicy`
+  (`NookHostConfiguration.activityPolicy`) sets the capsules; and
+  `NookModuleDescriptor.loadsAtLaunch` starts a resident module at launch. See
+  [Live activities](/guides/live-activities/). Source:
+  `Sources/NookKit/App/Activities/`.
+- **Shared elements** - `View.nookSharedElement(_:style:)` (`NookSharedElementStyle`)
+  moves an element between the compact pill, the peek, and the expanded content;
+  `\.nookSharedElementScope` scopes its id (NookKit sets the supplying module);
+  `NookTransitionConfiguration.sharedElementAnimation` and
+  `sharedElementPeekAnimation` set its curves. See
+  [Shared elements](/guides/shared-elements/). Source:
+  `Sources/NookSurface/NookSharedElement.swift`.
+- **Widgets and boards** - `NookWidget` (with `NookWidget.Action`), `NookWidgetSize`,
+  `NookWidgetSource`, `NookConfiguration.addWidget(_:)`, `widgets`, and `widgetSource`;
+  `NookWidgetGrid` lays widgets out in any view; `NookBoardConfiguration` (with
+  `Admission`), `NookWidgetPlacement`, and `NookHostConfiguration.registerBoard(_:)` make
+  a board module whose home is every loaded module's widgets, arranged in its Settings.
+  See [Widgets and boards](/guides/widgets-and-boards/). Source:
+  `Sources/NookKit/App/Widgets/`.
+- **Chrome strings and motion** - `NookChromeLabels` (`NookConfiguration.labels`,
+  `\.nookChromeLabels`) holds every string the framework draws, grouped as
+  `NookChromeLabels.TopBar`, `.Settings`, `.Appearance`, `.Display`, `.Shortcut`,
+  `.MenuBar`, `.Components`, and `.Widgets`, with `{name}` templates filled by
+  `NookChromeLabels.fill(_:_:)`; `NookChromeMotion` (`NookConfiguration.motion`,
+  `\.nookChromeMotion`) holds the in-panel curves, including `settingsDisclosure`,
+  `moduleSwitch`, and `activityCard`. See
+  [Labels](/guides/chrome-customization/#labels) and
+  [Motion](/guides/chrome-customization/#motion). Source:
+  `Sources/NookKit/App/NookChromeLabels.swift`,
+  `Sources/NookKit/App/NookChromeLabelGroups.swift`,
+  `Sources/NookKit/App/NookChromeMotion.swift`.
+- **Settings pieces** - `NookSettingsGroups` (`NookConfiguration.settingsGroups`),
+  `NookSettingsGroup`, `NookAppearanceSettingsSection`, `NookDisplaySettingsSection`,
+  `NookShortcutSettingsSection`, `NookResetSettingsSection`, and
+  `NookAboutSettingsSection`: hide groups of the built-in Settings screen, or build
+  your own from them. See
+  [Settings chrome](/guides/settings-chrome/#building-your-own-settings-screen).
+  Source: `Sources/NookKit/App/Views/Settings/`.
+- **Chrome behavior** - `NookChromeBehavior` with `NookGlassShading`
+  (`glassShading`), the backdrop resolvers (`backdrop`, `companionBackdrop`) and the
+  `NookBackdropContext` they receive, and `NookKeyboardBehavior` (`keyboard`);
+  `NookBackdropMapping`. See
+  [Chrome customization](/guides/chrome-customization/#chrome-behavior-nookchromebehavior)
+  and [Surface materials](/guides/surface-materials/#notch-fade). Source:
+  `Sources/NookKit/App/NookChromeBehavior.swift`,
+  `Sources/NookKit/App/NookBackdropContext.swift`,
+  `Sources/NookKit/App/NookBackdropMapping.swift`.
+- **Keyboard** - `AppCoordinator.takeNookKeyboardFocus()`,
+  `releaseNookKeyboardFocus()`, `nookHasKeyboardFocus`, and `nookWindow`;
+  `NookChromeActions.takeKeyboardFocus` / `releaseKeyboardFocus`;
+  `nookFocusOnAppear(_:)` and `nookKeepsExpanded(whileFocused:)`; `NookEditMenu`. See
+  [Typing in the nook](/guides/keyboard/). Source:
+  `Sources/NookKit/App/AppCoordinator.swift`,
+  `Sources/NookKit/System/NookEditMenu.swift`.
+- **Theme** - `NookTheme` (`NookConfiguration.chromeTheme`,
+  `NookHostConfiguration.chromeTheme`, `NookApp.main(theme:home:)`): knobs,
+  `NookRadiusScale`, `NookMotionScheme`, `NookThemeTokens` keyed by `NookColorID`,
+  `NookDimensionID`, `NookFontID`, `NookAnimationID`, `NookTransitionID`,
+  `NookSoundID`, and `NookShadowID`, and `NookThemeBackdrops`. The values a theme
+  holds: `NookColorValue`, `NookRGBA`, `NookAdaptiveColor`, `NookSystemColor`,
+  `NookDimension`, `NookAdaptiveNumber`, `NookFontSpec`, `NookAnimationSpec`,
+  `NookContentTransitionSpec`, `NookGradientSpec`, `NookShadowSpec`,
+  `NookSoundSpec`, `NookUnitPointSpec`, and `NookBackdropDescription`. Resolution:
+  `NookThemeContext`, `NookResolvedTokens` (`\.nookThemeTokens`), `\.nookTheme`,
+  `NookChromeColors` (`\.nookChromeColors`). Files: `NookThemeCoder`,
+  `NookThemeLoadResult`, `NookThemeIssue`, `NookThemeError`. Live themes:
+  `NookThemeSource` (`chromeThemeSource`). Custom backdrop views:
+  `NookConfiguration.themeBackdrops`. Feedback in the theme's tint:
+  `AppCoordinator.playFeedback(_:duration:repeats:)`. Choreography:
+  `nookStaggered(index:)` for rows that cascade in on `motion.stagger`. Sounds:
+  `AppCoordinator.playSound(_:)`, `NookChromeActions.playSound`, and
+  `NookAppearancePreferences.soundsEnabled` (the Settings "Sounds" row). See
+  [Theming](/guides/theming/), [Choreography](/guides/theming/#choreography), and
+  [Sounds](/guides/theming/#sounds). Source: `Sources/NookKit/Theme/`.
+- **Palette** - `NookResolvedTheme`. The flat palette every chrome view reads,
+  including `accent`, `fontDesign`, and the `hoverWash`, `destructive`, `warning`,
+  and `success` roles. See [Theming](/guides/theming/#reading-the-theme-in-views).
+  Source: `Sources/NookKit/App/NookResolvedTheme.swift`.
 - **Appearance preferences** - `NookAppearancePreferences`, `NookChromePalette`,
   `NookSurfaceStyle`. The persisted, user-facing surface and chrome state. See
   [Theming](/guides/theming/#user-facing-appearance-preferences). Source:
@@ -51,9 +145,17 @@ The app chrome layered over `NookSurface`.
   `toggleKeepNookOpen`), plus `switchModule`/`cycleModule` and the
   `NookSurfacePresenting` conformance. See [Your first nook](/start/first-nook/).
   Source: `Sources/NookKit/App/AppCoordinator.swift`.
+- **Live configuration** - `AppCoordinator.reloadActiveConfiguration()` rebuilds
+  the active module's configuration and applies it to the running chrome, and
+  `AppCoordinator.replaceChromeBehavior(_:)` changes the host's chrome behavior at
+  runtime (`ModuleHost.chromeBehavior` reads it back). See
+  [Playground](/guides/playground/). Source:
+  `Sources/NookKit/App/AppCoordinator.swift`.
 - **State** - `AppState`, `NookViewMode`, `HotkeyRegistrationFailure`. The
   observable chrome state; `replaceAppearancePreferences(_:)` is the persisted
-  write path. Source: `Sources/NookKit/App/AppState.swift`.
+  write path, `preferenceDefaults` reads the host's launch defaults back, and
+  `resetAppearancePreferences()`, `resetHotkey()`, and `resetDisplayPreference()`
+  return to them. Source: `Sources/NookKit/App/AppState.swift`.
 - **Services** - `AppServices`, `ServiceKey`. The per-module dependency
   container resolved from `\.appServices`. See
   [Multiple modules](/guides/multiple-modules/#service-isolation-servicekey-and-appservices).
@@ -65,6 +167,19 @@ The app chrome layered over `NookSurface`.
   `Sources/NookKit/App/Modules/`.
 - **Input and display** - `NookHotkey` (`Sources/NookKit/System/NookHotkey.swift`),
   `NookDisplayPreference` (`Sources/NookKit/App/NookDisplayPreference.swift`).
+- **Companion surfaces** - `NookCompanion` and
+  `NookConfiguration.addCompanion(...)`, with the shared `companionStyle`,
+  `companionSize`, and `companionPresence`; `NookCompanionSource`
+  (`NookConfiguration.companionSource`) for companions that come and go while the app
+  runs; the glyph button style `NookGlyphButtonStyle` (`.nookGlyph`); and the chrome
+  controls `NookChromeActions` (`\.nookChromeActions`), `NookKeepOpenButton`, and
+  `NookSettingsButton`, with the `topBar.showsKeepOpenButton` /
+  `showsSettingsButton` flags. See
+  [Companion surfaces](/guides/companion-surfaces/). Source:
+  `Sources/NookKit/App/NookCompanion.swift`,
+  `Sources/NookKit/App/NookCompanionSource.swift`,
+  `Sources/NookKit/App/NookGlyphButtonStyle.swift`,
+  `Sources/NookKit/App/NookChromeActions.swift`.
 - **Layout metrics** - `NookLayout`, the public chrome dimension constants
   (expanded width, edge padding, compact-slot size, breadcrumb width), and
   `NookChromeMetrics`, the host-tunable metrics bag (`edgePadding`, compact slot
@@ -72,6 +187,12 @@ The app chrome layered over `NookSurface`.
   [Layout and content insets](/guides/layout-and-insets/). Source:
   `Sources/NookKit/App/Views/Layout/NookLayout.swift`,
   `Sources/NookKit/App/NookChromeMetrics.swift`.
+- **Notch clearance** - `NookNotchClearance` (`topBar.notchClearance`),
+  `NookNotchRow`, and the `nookNotchAccessories(leading:trailing:)` modifier: keeping
+  content clear of the hardware notch, and putting views beside it. See
+  [Layout and content insets](/guides/layout-and-insets/#clearing-the-notch). Source:
+  `Sources/NookKit/App/Views/Layout/NookNotchClearance.swift`,
+  `Sources/NookKit/App/Views/Layout/NookNotchRow.swift`.
 
 ## NookSurface
 
@@ -79,10 +200,53 @@ The low-level notch window, re-exported through `NookApp`. Most hosts drive
 these through `NookKit` rather than directly; the host-facing knobs are:
 
 - `NookStyle` - corner radii, `expandedContentInsets`, and the built-in animation curves.
-- `NookTransitionConfiguration` - per-instance animation overrides.
+  `Nook.style` and `Nook.hoverBehavior` are settable, so a running chrome can be
+  restyled in place.
+- `NookTransitionConfiguration` - per-instance animation overrides, and how content
+  arrives and leaves (`expandedContentTransition`, `expandedContentRemoval`,
+  `compactContentTransition`, `compactContentRemoval`).
 - `NookPresentation` - notch-fused vs free-floating chrome.
 - `NookContentInsets` - curve-derived safe-area insets for edge-pinned host content.
   See [Layout and content insets](/guides/layout-and-insets/).
+- `NookNotchCutout`, `\.nookNotchCutout` - where the hardware notch falls in the host
+  content frame. See
+  [Layout and content insets](/guides/layout-and-insets/#clearing-the-notch).
+- `NookCompanionSurface`, `NookCompanionAnchor`, `NookCompanionVisibility`,
+  `NookCompanionShape`, `NookCompanionBackdrop` - companion surfaces at the engine
+  level (`Nook.companions`), with the `nookCompanionVisibility(_:)` /
+  `nookCompanionHidden(_:)` modifiers, `\.nookCompanionIsPresented`, and
+  `\.nookCompanionIsHovered`. See [Companion surfaces](/guides/companion-surfaces/).
+- `NookCompanionStyle`, `AnyNookCompanionStyle`, `NookStandardCompanionStyle`,
+  `NookCompanionStyleConfiguration`, `NookCompanionFadeMask`, `NookOutlineShadow` -
+  how a companion surface is drawn; `NookCompanionSize` (`\.nookCompanionSize`) -
+  the size a companion shares with its controls; `NookCompanionPresence` - how it
+  comes and goes. See [Companion surfaces](/guides/companion-surfaces/#look).
+- `NookBackdropView`, `\.nookChromeBackdrop` - the chrome's backdrop, painted in any
+  shape by content and styles; `Nook.companionBackdrop` - what companions inherit
+  instead; `NookBackdrop.LiquidGlass.Shading.notchFade(_:strength:)` - the notch fade
+  gradient.
+- `Nook.layoutForm` (`NookChromeForm`) - the layout `Nook.presentation` resolved to on
+  the chrome's current screen, notch-fused or floating.
+- `Nook.takeKeyboardFocus()`, `releaseKeyboardFocus()`, `hasKeyboardFocus`
+  (`\.nookHasKeyboardFocus` in content), and `Nook.window` - the panel's keyboard
+  focus and the panel itself. See
+  [Typing in the nook](/guides/keyboard/).
+- `NookRimGlowStyle`, `NookRimGlowPreferenceKey`, `nookRimGlow(_:)` - the glowing
+  rim; `NookScrollEdgeFade`, `nookScrollEdgeFade(...)`, `\.nookScrollEdgeFade` - the
+  scroll edge fade. See [Rim glow and edge fade](/guides/panel-effects/).
+- `NookBackdrop.GradientFill`, `NookBackdrop.Custom`, and the `.gradient`,
+  `.meshGradient`, and `.custom` backdrops. See
+  [Surface materials](/guides/surface-materials/#backdrops-beyond-the-three-styles).
+- `NookShape`, `NookOutline`, `\.nookChromeShape`, and `NookContentTransition` - the
+  chrome's outline and how content arrives and leaves, with its own `animation` and an
+  arrival `delay`. `NookHoverHaptic` (`Nook.hoverHaptic`). See
+  [Chrome customization](/guides/chrome-customization/#engine-level-shape-and-motion-nooksurface).
+- `NookChromeShadow` (`Nook.chromeShadow`), `NookFeedbackStyle`, and `NookAmbientWash`
+  (`Nook.ambientWash`). See [Rim glow and edge fade](/guides/panel-effects/#chrome-shadow).
+- `Nook.peekContent`, `peek(on:)`, `endPeek()`, `isPeeking`, and `NookHoverIntent`
+  (`Nook.hoverIntent`) - the compact pill's peek and what hovering it does, with the
+  peek's `NookStyle` and `NookTransitionConfiguration` fields. See
+  [Hover and peek](/guides/hover-and-peek/).
 
 Both `NookStyle` and `NookTransitionConfiguration` are surfaced on
 `NookConfiguration`; see

@@ -73,14 +73,68 @@ protocol NookSurfaceDriving: AnyObject {
     /// How the chrome presents itself - notch-fused, floating, or auto.
     var presentation: NookPresentation { get set }
 
+    /// The layout ``presentation`` resolved to on the chrome's current screen.
+    var layoutForm: NookChromeForm { get }
+    /// Emits on every `layoutForm` change.
+    var layoutFormPublisher: AnyPublisher<NookChromeForm, Never> { get }
+
     /// Pins the chrome window's `NSAppearance`. `nil` follows the system.
     var chromeAppearance: NSAppearance? { get set }
 
     /// What the chrome paints behind compact and expanded content.
     var backdrop: NookBackdrop { get set }
 
+    /// What companions inheriting the chrome's backdrop paint, or `nil` for the chrome's own.
+    var companionBackdrop: NookBackdrop? { get set }
+
+    /// The panel the chrome is drawn in right now, or `nil` while hidden.
+    var window: NSWindow? { get }
+
+    /// `true` while the chrome's panel has the keyboard.
+    var hasKeyboardFocus: Bool { get }
+
+    /// Gives the chrome's panel the keyboard. Returns `false` while hidden.
+    @discardableResult
+    func takeKeyboardFocus() -> Bool
+
+    /// Hands the keyboard back to the app in front.
+    func releaseKeyboardFocus()
+
     /// Open/close/conversion animation curves.
     var transitionConfiguration: NookTransitionConfiguration { get set }
+
+    /// Corner radii and expanded-content insets. Set at construction and re-projected by a
+    /// configuration reload.
+    var style: NookStyle { get set }
+
+    /// Hover side-effects. Re-projected when the host replaces its chrome behavior.
+    var hoverBehavior: NookHoverBehavior { get set }
+
+    /// What resting the pointer on the compact pill does. Projected from the host's chrome
+    /// behavior, or the person's preferences.
+    var hoverIntent: NookHoverIntent { get set }
+
+    /// The view the compact pill grows to show while it peeks, or `nil` for no peek. Projected
+    /// from the displayed module's configuration.
+    var peekContent: AnyView? { get set }
+
+    /// `true` while the compact pill shows its peek region.
+    var isPeeking: Bool { get }
+
+    /// Grow the compact pill into its peek region.
+    func peek(on screen: NSScreen?) async
+    /// Shrink a peeking pill back to its compact slots.
+    func endPeek() async
+
+    /// Host surfaces floated beside the chrome. Re-projected on a module switch, so the
+    /// outgoing module's companions leave with it.
+    var companions: [NookCompanionSurface] { get set }
+
+    /// How the chrome draws its rim glow. Re-projected on a module switch.
+    var rimGlowStyle: NookRimGlowStyle { get set }
+
+    /// The panel-wide scroll edge fade, or `nil` for none. Re-projected on a module switch.
+    var scrollEdgeFade: NookScrollEdgeFade? { get set }
 
     /// `true` while the chrome has a live `NSWindow` mounted. The coordinator uses
     /// this to decide whether a re-placement after a display change should reach
@@ -92,6 +146,17 @@ protocol NookSurfaceDriving: AnyObject {
 
     /// Restore compact slot content and restart its developer-configured idle deadline.
     func noteCompactActivity()
+
+    /// Play a one-shot peripheral cue drawn in `style`.
+    func playFeedback(_ effect: NookFeedback, style: NookFeedbackStyle, duration: TimeInterval, repeats: Bool)
+
+    /// The shadow the chrome casts, or `nil` for none. Projected from the displayed module's
+    /// chrome theme.
+    var chromeShadow: NookChromeShadow? { get set }
+
+    /// The wash behind expanded content lit by `nookAmbientColor(_:)`. Projected from the
+    /// displayed module's chrome theme.
+    var ambientWash: NookAmbientWash { get set }
 }
 
 extension NookSurfaceDriving {
@@ -127,5 +192,9 @@ extension Nook: NookSurfaceDriving {
 
     var isLayoutGraceActivePublisher: AnyPublisher<Bool, Never> {
         $isLayoutGraceActive.eraseToAnyPublisher()
+    }
+
+    var layoutFormPublisher: AnyPublisher<NookChromeForm, Never> {
+        $layoutForm.eraseToAnyPublisher()
     }
 }

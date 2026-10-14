@@ -158,7 +158,7 @@ final class NookSurfaceConcurrencyTests: XCTestCase {
         // A hide-like transition captures its generation, then yields so a newer
         // transition can be claimed while it is "in flight".
         var hideStillCurrentAfterSupersede: Bool?
-        let hideTask = nook.runTransition { generation in
+        let hideTask = nook.runTransition(toward: .hidden) { generation in
             // Cooperatively yield: lets the second `runTransition` below claim a
             // newer generation, mimicking an expand racing this hide's teardown.
             await Task.yield()
@@ -166,7 +166,7 @@ final class NookSurfaceConcurrencyTests: XCTestCase {
         }
 
         var expandGenerationIsCurrent: Bool?
-        let expandTask = nook.runTransition { generation in
+        let expandTask = nook.runTransition(toward: .expanded) { generation in
             expandGenerationIsCurrent = nook.isCurrent(generation)
         }
 
@@ -187,7 +187,7 @@ final class NookSurfaceConcurrencyTests: XCTestCase {
         let nook = makeNook()
         var stillCurrentAfterSwap: Bool?
 
-        let task = nook.runTransition { generation in
+        let task = nook.runTransition(toward: .expanded) { generation in
             await Task.yield()
             stillCurrentAfterSwap = nook.isCurrent(generation)
         }
@@ -196,6 +196,160 @@ final class NookSurfaceConcurrencyTests: XCTestCase {
         await task.value
 
         XCTAssertEqual(stillCurrentAfterSwap, false)
+    }
+
+    // MARK: - BUG 3: a display change mid-transition must not strand the surface
+
+    /// Posts the notification the surface's screen-parameter observer listens for. The
+    /// observer receives on `RunLoop.main`, so callers poll for the effect rather than
+    /// assuming synchronous delivery.
+    private func postScreenParameterChange() {
+        NotificationCenter.default.post(
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: NSApp
+        )
+    }
+
+    /// A nook whose conversions dwell long enough at the transient `.hidden` for a test to
+    /// land a notification inside that window. `hoverBehavior: []` keeps a pointer parked
+    /// over the notch out of the transitions; compact content keeps `compact` from
+    /// collapsing to a full hide.
+    private func makeSlowNook() -> Nook<Text, Text, EmptyView> {
+        let nook = Nook(hoverBehavior: [], expanded: { Text("x") }, compactLeading: { Text("L") })
+        nook.transitionConfiguration.animationDuration = 0.5
+        return nook
+    }
+
+    // MARK: - Content arrival in the awaited settle
+
+    /// With the default transitions nothing arrives late, so an awaited transition settles
+    /// exactly as it did before content could be held back.
+    func testContentArrivalIsZeroByDefault() {
+        let nook = makeNook()
+        XCTAssertEqual(nook.contentArrivalDuration(for: .expanded), .zero)
+        XCTAssertEqual(nook.contentArrivalDuration(for: .compact), .zero)
+        XCTAssertEqual(nook.contentArrivalDuration(for: .hidden), .zero)
+    }
+
+    /// Expanded content waits for its enter delay plus the host's entrance; compact slots for
+    /// their own enter delay. The hide dwell between transitions is not lengthened by either.
+    func testContentArrivalAddsEachStatesDelays() {
+        let nook = makeNook()
+        let hideDwell = nook.intermediateHideDuration
+        nook.transitionConfiguration.expandedContentTransition = NookContentTransition(
+            blurRadius: 6,
+            scale: 0.72,
+            delay: 0.2
+        )
+        nook.transitionConfiguration.expandedEntranceDuration = 0.3
+        nook.transitionConfiguration.compactContentTransition = NookContentTransition(
+            blurRadius: 6,
+            scale: 0,
+            delay: 0.1
+        )
+
+        XCTAssertEqual(nook.contentArrivalDuration(for: .expanded), .seconds(0.5))
+        XCTAssertEqual(nook.contentArrivalDuration(for: .compact), .seconds(0.1))
+        XCTAssertEqual(nook.intermediateHideDuration, hideDwell)
+    }
+
+    /// A negative or non-finite entrance is read as none.
+    func testEntranceDurationIsNeverNegative() {
+        XCTAssertEqual(NookTransitionConfiguration(expandedEntranceDuration: -1).expandedEntranceDuration, 0)
+        XCTAssertEqual(NookTransitionConfiguration(expandedEntranceDuration: .infinity).expandedEntranceDuration, 0)
+    }
+
+    /// An awaited expand returns only after content held back by its enter delay and the
+    /// host's entrance has started arriving, not after the chrome's settle alone.
+    func testAwaitedExpandWaitsForDelayedContent() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+
+        let nook = makeSlowNook()
+        await nook.compact(on: screen)
+        nook.transitionConfiguration.skipIntermediateHides = true
+        nook.transitionConfiguration.expandedContentTransition = NookContentTransition(
+            blurRadius: 6,
+            scale: 0.72,
+            delay: 0.25
+        )
+        nook.transitionConfiguration.expandedEntranceDuration = 0.25
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        await nook.expand(on: screen)
+        let elapsed = clock.now - started
+
+        XCTAssertEqual(nook.state, .expanded)
+        XCTAssertGreaterThanOrEqual(elapsed, nook.conversionSettleDuration + .seconds(0.5))
+
+        await nook.hide()
+    }
+
+    /// A compact -> expanded conversion parks at `.hidden` for `intermediateHideDuration`
+    /// before animating the expanded chrome in. The screen-parameter observer used to read
+    /// that `.hidden` as "settled, nothing to keep", cancel the in-flight conversion and
+    /// tear the window down without starting a replacement - leaving an invisible surface
+    /// until the host happened to ask again. (This is the ShowcaseNook launch hang: CI's
+    /// virtual display fires the notification right through the conversion.)
+    func testScreenChangeDuringConversionStillReachesExpanded() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+
+        let nook = makeSlowNook()
+        await nook.compact(on: screen)
+        XCTAssertEqual(nook.state, .compact)
+
+        let expanding = Task { await nook.expand(on: screen) }
+        await waitUntil { nook.state == .hidden }
+        postScreenParameterChange()
+        await expanding.value
+
+        await waitUntil { nook.state == .expanded }
+        XCTAssertEqual(nook.state, .expanded, "a display change mid-conversion must not strand the surface hidden")
+        XCTAssertTrue(nook.hasLiveWindow, "the re-driven expand rebuilds the window the observer dropped")
+
+        await nook.hide()
+    }
+
+    /// The mirrored case: the expanded -> compact conversion passes through the same
+    /// transient `.hidden`, so it strands the same way.
+    func testScreenChangeDuringConversionStillReachesCompact() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+
+        let nook = makeSlowNook()
+        await nook.expand(on: screen)
+        XCTAssertEqual(nook.state, .expanded)
+
+        let compacting = Task { await nook.compact(on: screen) }
+        await waitUntil { nook.state == .hidden }
+        postScreenParameterChange()
+        await compacting.value
+
+        await waitUntil { nook.state == .compact }
+        XCTAssertEqual(nook.state, .compact, "a display change mid-conversion must not strand the surface hidden")
+        XCTAssertTrue(nook.hasLiveWindow)
+
+        await nook.hide()
+    }
+
+    /// The other side of the same coin: a *requested* hide is driving toward `.hidden`, so
+    /// the same interruption must leave it hidden with its window gone rather than re-drive
+    /// it back on screen.
+    func testScreenChangeDuringHideStillEndsHidden() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+
+        let nook = makeSlowNook()
+        await nook.expand(on: screen)
+        XCTAssertEqual(nook.state, .expanded)
+
+        let hiding = Task { await nook.hide() }
+        await waitUntil { nook.state == .hidden }
+        postScreenParameterChange()
+        await hiding.value
+
+        // Long enough for a wrongly re-driven open (and its settle) to have shown itself.
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(nook.state, .hidden, "a real hide's target is hidden - nothing to re-drive")
+        XCTAssertFalse(nook.hasLiveWindow, "the hidden surface keeps no window")
     }
 
     /// An awaited `hide()` always resolves - it now routes through `runTransition` like
@@ -217,7 +371,7 @@ final class NookSurfaceConcurrencyTests: XCTestCase {
             startedAt: Date(),
             effect: .shimmer,
             duration: duration,
-            tint: .white,
+            style: NookFeedbackStyle(color: .white),
             respectsReduceMotion: true,
             repeats: repeats
         )
@@ -359,33 +513,31 @@ final class NookSurfaceConcurrencyTests: XCTestCase {
         }
     }
 
-    /// The standard initializer used by AppCoordinator has compact content. It must install
-    /// the same state observer as the no-compact convenience initializer so collapse cancels
-    /// a long grace immediately instead of leaving its timer and engagement signal alive.
-    func testCompactContentInitEndsLayoutGraceOnCollapse() async throws {
+    /// Regression: the public designated init (the one `AppCoordinator` builds its surface
+    /// with) never subscribed the state observer that ends layout grace, so a collapse left
+    /// `isLayoutGraceActive` set until its timer ran out - holding the coordinator's
+    /// `isUserEngaged` true after the user was gone. The grace here is far longer than the
+    /// poll timeout, so only the observer can clear it in time.
+    func testCompactEndsLayoutGraceOnNookBuiltWithPublicInit() async throws {
         guard let screen = NSScreen.main else {
             throw XCTSkip("No main display attached")
         }
 
-        let nook = Nook(
-            expanded: { Text("expanded") },
-            compactLeading: { Text("compact") }
-        )
-        nook.transitionConfiguration = NookTransitionConfiguration(
-            openingAnimation: .linear(duration: 0),
-            closingAnimation: .linear(duration: 0),
-            conversionAnimation: .linear(duration: 0),
-            skipIntermediateHides: true,
-            animationDuration: 0,
-            layoutGraceDuration: 5
-        )
-
+        // `hoverBehavior: []` keeps `hide()` from waiting on a pointer that happens to be
+        // over the notch; compact content keeps `compact` from collapsing to a hide.
+        let nook = Nook(hoverBehavior: [], expanded: { Text("x") }, compactLeading: { Text("L") })
+        nook.transitionConfiguration.layoutGraceDuration = 30
+        nook.transitionConfiguration.animationDuration = 0.05
         await nook.expand(on: screen)
+        XCTAssertEqual(nook.state, .expanded)
+
         nook.beginLayoutGrace()
         XCTAssertTrue(nook.isLayoutGraceActive)
 
         await nook.compact(on: screen)
-        XCTAssertFalse(nook.isLayoutGraceActive, "collapse must cancel layout grace immediately")
+        XCTAssertEqual(nook.state, .compact)
+        await waitUntil { !nook.isLayoutGraceActive }
+        XCTAssertFalse(nook.isLayoutGraceActive, "leaving the expanded state should end layout grace")
 
         await nook.hide()
     }
@@ -414,9 +566,180 @@ final class NookSurfaceConcurrencyTests: XCTestCase {
 
         await waitUntil { !nook.isLayoutGraceActive }
         XCTAssertFalse(nook.isLayoutGraceActive)
+        await waitUntil { compactCount >= 1 }
+        XCTAssertEqual(compactCount, 1, "the exit layout grace held back should collapse once the grace ends")
+        XCTAssertEqual(nook.state, .compact)
+    }
+
+    // MARK: - Hover exits a hold deferred
+
+    /// A nook expanded on the main display with compact content, fast transitions, and an
+    /// `onCompact` counter.
+    private func makeExpandedNook(on screen: NSScreen) async -> (Nook<Text, Text, EmptyView>, () -> Int) {
+        let nook = Nook(hoverBehavior: [], expanded: { Text("x") }, compactLeading: { Text("L") })
+        nook.transitionConfiguration.animationDuration = 0.05
+        await nook.expand(on: screen)
+        var compactCount = 0
+        nook.onCompact = { compactCount += 1 }
+        return (nook, { compactCount })
+    }
+
+    /// Regression: a pointer that left while a hold kept the nook open left it open for good,
+    /// until the pointer came back and left again. Releasing the hold now collapses it.
+    func testPointerThatLeftDuringAHoldCollapsesWhenTheHoldEnds() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+        let (nook, compactCount) = await makeExpandedNook(on: screen)
+
+        nook.staysExpandedOnHoverExit = true
         nook.updateHoverState(true)
         nook.updateHoverState(false)
-        await waitUntil { compactCount >= 1 }
-        XCTAssertEqual(compactCount, 1, "after grace expires, hover-exit should compact")
+        await Task.yield()
+        XCTAssertEqual(compactCount(), 0, "the hold keeps the nook open while it lasts")
+        XCTAssertTrue(nook.hasDeferredHoverExit)
+
+        nook.staysExpandedOnHoverExit = false
+        await waitUntil { nook.state == .compact }
+        XCTAssertEqual(compactCount(), 1)
+        XCTAssertFalse(nook.hasDeferredHoverExit)
+        await nook.hide()
+    }
+
+    /// A nook the pointer never left - opened from the keyboard, say - stays open when a hold
+    /// ends, exactly as before.
+    func testHoldEndingWithoutAHoverExitKeepsTheNookOpen() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+        let (nook, compactCount) = await makeExpandedNook(on: screen)
+
+        nook.staysExpandedOnHoverExit = true
+        nook.staysExpandedOnHoverExit = false
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(nook.state, .expanded)
+        XCTAssertEqual(compactCount(), 0)
+        await nook.hide()
+    }
+
+    /// The pointer coming back before the hold ends cancels the collapse it owed.
+    func testPointerReturningBeforeTheHoldEndsCancelsTheOwedCollapse() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+        let (nook, compactCount) = await makeExpandedNook(on: screen)
+
+        nook.staysExpandedOnHoverExit = true
+        nook.updateHoverState(true)
+        nook.updateHoverState(false)
+        nook.updateHoverState(true)
+        XCTAssertFalse(nook.hasDeferredHoverExit)
+
+        nook.staysExpandedOnHoverExit = false
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(nook.state, .expanded, "the pointer is over the nook, so nothing collapses it")
+        XCTAssertEqual(compactCount(), 0)
+        await nook.hide()
+    }
+
+    /// With two holds at once, the owed collapse waits for the last one to end.
+    func testOwedCollapseWaitsForEveryHoldToEnd() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+        let (nook, compactCount) = await makeExpandedNook(on: screen)
+        nook.transitionConfiguration.layoutGraceDuration = 30
+
+        nook.staysExpandedOnHoverExit = true
+        nook.beginLayoutGrace()
+        nook.updateHoverState(true)
+        nook.updateHoverState(false)
+
+        nook.staysExpandedOnHoverExit = false
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(nook.state, .expanded, "layout grace still holds the nook open")
+        XCTAssertEqual(compactCount(), 0)
+
+        nook.endLayoutGrace()
+        await waitUntil { nook.state == .compact }
+        XCTAssertEqual(compactCount(), 1)
+        await nook.hide()
+    }
+
+    /// An owed collapse is forgotten when the nook collapses some other way first, so it cannot
+    /// fire later into a nook that was opened again.
+    func testCollapsingForgetsTheOwedCollapse() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+        let (nook, compactCount) = await makeExpandedNook(on: screen)
+
+        nook.staysExpandedOnHoverExit = true
+        nook.updateHoverState(true)
+        nook.updateHoverState(false)
+        await nook.compact(on: screen)
+        XCTAssertFalse(nook.hasDeferredHoverExit)
+        await nook.expand(on: screen)
+
+        nook.staysExpandedOnHoverExit = false
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(nook.state, .expanded)
+        XCTAssertEqual(compactCount(), 1, "only the explicit compact")
+        await nook.hide()
+    }
+
+    // MARK: - Keyboard focus
+
+    /// A click or a focus on an editable text input counts as typing, found from the input
+    /// itself or a view inside it; labels, read-only text, and plain views do not.
+    func testOnlyEditableTextInputsAcceptTyping() {
+        XCTAssertTrue(NookPanel.acceptsTyping(NSTextField()))
+        XCTAssertFalse(NookPanel.acceptsTyping(NSTextField(labelWithString: "Label")))
+
+        let editor = NSTextView()
+        XCTAssertTrue(NookPanel.acceptsTyping(editor))
+        editor.isEditable = false
+        XCTAssertFalse(NookPanel.acceptsTyping(editor), "read-only text is selectable, not typed into")
+
+        let field = NSTextField()
+        let inner = NSView()
+        field.addSubview(inner)
+        XCTAssertTrue(NookPanel.acceptsTyping(inner), "a click on a view inside a field is a click on the field")
+
+        XCTAssertFalse(NookPanel.acceptsTyping(NSView()))
+        XCTAssertFalse(NookPanel.acceptsTyping(nil))
+    }
+
+    /// A hidden chrome has no panel to give the keyboard to.
+    func testHiddenChromeCannotTakeTheKeyboard() {
+        let nook = makeNook()
+        XCTAssertFalse(nook.takeKeyboardFocus())
+        XCTAssertFalse(nook.hasKeyboardFocus)
+        XCTAssertNil(nook.window)
+        nook.releaseKeyboardFocus()  // nothing to release; must not crash
+    }
+
+    /// An expanded chrome's panel takes the keyboard, and collapsing hands it back.
+    func testExpandedChromeTakesTheKeyboardAndCollapsingReleasesIt() async throws {
+        guard let screen = NSScreen.main else { throw XCTSkip("No main display attached") }
+        let nook = Nook(hoverBehavior: [], expanded: { Text("x") }, compactLeading: { Text("L") })
+        nook.transitionConfiguration.animationDuration = 0.05
+        await nook.expand(on: screen)
+        XCTAssertNotNil(nook.window)
+        XCTAssertEqual(nook.window?.accessibilityIdentifier(), "opennook.panel")
+
+        guard nook.takeKeyboardFocus() else {
+            await nook.hide()
+            throw XCTSkip("This test process cannot make a window key")
+        }
+        XCTAssertTrue(nook.hasKeyboardFocus)
+
+        await nook.compact(on: screen)
+        await waitUntil { !nook.hasKeyboardFocus }
+        XCTAssertFalse(nook.hasKeyboardFocus, "a collapsed chrome does not keep the keyboard")
+        await nook.hide()
+    }
+
+    /// Companions inherit the chrome's backdrop unless the chrome sets one for them.
+    func testCompanionsInheritTheirOwnBackdropWhenSet() {
+        let nook = makeNook()
+        nook.backdrop = .solid(.red)
+        XCTAssertEqual(nook.inheritedCompanionBackdrop, .solid(.red))
+        nook.companionBackdrop = .solid(.blue)
+        XCTAssertEqual(nook.inheritedCompanionBackdrop, .solid(.blue))
+        XCTAssertEqual(
+            NookCompanionBackdrop.inherit.resolved(inheriting: nook.inheritedCompanionBackdrop),
+            .solid(.blue)
+        )
     }
 }

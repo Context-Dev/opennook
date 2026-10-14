@@ -19,7 +19,7 @@ import SwiftUI
 /// cannot drift between launch surfaces.
 public enum NookApp {
     /// Boots a multi-module notch app: one host process that owns the notch surface and
-    /// lets the user switch between the registered ``NookModule``s at runtime.
+    /// lets the user switch between the registered `NookModule`s at runtime.
     ///
     /// The OS calls this from the process's main thread at startup, so we assert that
     /// invariant via `MainActor.assumeIsolated` and run the actual setup on the main actor.
@@ -34,11 +34,11 @@ public enum NookApp {
         }
     }
 
-    /// Boots a notch app with the given ``NookConfiguration``. The default value
+    /// Boots a notch app with the given `NookConfiguration`. The default value
     /// reproduces the framework demo, so `NookApp.main()` is unchanged.
     ///
     /// This is the single-module path: the configuration is registered as the lone
-    /// module of a ``NookHostConfiguration``, so a single notch app is just a host with
+    /// module of a `NookHostConfiguration`, so a single notch app is just a host with
     /// one module and no switcher.
     public static func main(_ configuration: NookConfiguration = NookConfiguration()) {
         var host = NookHostConfiguration()
@@ -70,7 +70,22 @@ public enum NookApp {
         main(configuration)
     }
 
-    /// Boots a notch app, building the ``NookConfiguration`` on the main actor.
+    /// "Register a view, pick a look, go" - ``main(home:)`` with a chrome theme:
+    ///
+    /// ```swift
+    /// NookApp.main(theme: NookTheme(accent: "#3399FF", radius: .large)) { MyHomeView() }
+    /// ```
+    public static func main<Home: View & Sendable>(
+        theme: NookTheme,
+        @ViewBuilder home: @escaping @Sendable @MainActor () -> Home
+    ) {
+        var configuration = NookConfiguration()
+        configuration.setHome(home)
+        configuration.chromeTheme = theme
+        main(configuration)
+    }
+
+    /// Boots a notch app, building the `NookConfiguration` on the main actor.
     ///
     /// Use this overload when setup constructs main-actor-isolated types - a
     /// `NookComponents` `ShelfStore` or `NookActivityQueue`, a host view model - which
@@ -128,7 +143,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         guard moduleHost.showsMenuBarExtra else { return }
 
         let hostName = moduleHost.branding.hostName
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        // Variable length so the wide framework mark isn't squeezed into a square button.
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image =
             moduleHost.branding.menuBarTemplateImage(size: 14)
             ?? NSImage(systemSymbolName: "text.bubble", accessibilityDescription: hostName)
@@ -158,10 +174,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem else { return }
         let hostName = moduleHost.branding.hostName
         let showHotkey = coordinator.appState.hotkey
+        // The active module's strings, like the "Settings..." item's chrome flag below.
+        let labels = moduleHost.configuration.labels.menuBar
 
         let menu = NSMenu()
         let showItem = NSMenuItem(
-            title: "Show \(hostName)",
+            title: labels.showHost(hostName),
             action: #selector(showNook),
             keyEquivalent: showHotkey.menuKeyEquivalent
         )
@@ -174,7 +192,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         if moduleHost.configuration.topBar.showsSettings {
             menu.addItem(
                 NSMenuItem(
-                    title: "Settings…",
+                    title: labels.settings,
                     action: #selector(showSettings),
                     keyEquivalent: ","
                 )
@@ -182,7 +200,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(
             NSMenuItem(
-                title: "Toggle Stay Expanded",
+                title: labels.toggleStayExpanded,
                 action: #selector(toggleKeepOpen),
                 keyEquivalent: "k"
             )
@@ -193,7 +211,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         // selecting switches. This keeps switching off the host's expanded surface.
         if moduleHost.switcherPlacement.listsModulesInMenuBar && moduleHost.isMultiModule {
             menu.addItem(.separator())
-            menu.addItem(.sectionHeader(title: "Modules"))
+            menu.addItem(.sectionHeader(title: labels.modules))
             for descriptor in moduleHost.descriptors {
                 let moduleItem = NSMenuItem(
                     title: descriptor.displayName,
@@ -213,7 +231,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(
             NSMenuItem(
-                title: "Quit",
+                title: labels.quit,
                 action: #selector(quit),
                 keyEquivalent: "q"
             )

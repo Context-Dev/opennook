@@ -69,8 +69,35 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
         return true
     }
 
-    public let style: NookStyle
-    public let hoverBehavior: NookHoverBehavior
+    /// The panel the chrome is drawn in right now, or `nil` while hidden.
+    ///
+    /// Read it when you need it rather than keeping it: the chrome builds a new panel each time
+    /// it shows after being hidden and whenever it moves to another display, and the old one is
+    /// closed. Its accessibility identifier is `opennook.panel`. For typing, prefer
+    /// ``takeKeyboardFocus()`` to making the panel key yourself.
+    public var window: NSWindow? { windowController?.window }
+
+    /// The chrome's corner radii and expanded-content insets. Settable, so a host can retune
+    /// the shape at runtime: a visible chrome restyles in place, and a hidden one picks the new
+    /// style up when it next shows. Wrap the change in `withAnimation` to animate it.
+    @Published public var style: NookStyle
+
+    /// Side-effects applied while the pointer is over the chrome. Read on every hover change
+    /// and every hide, so a new value takes effect from the next one.
+    public var hoverBehavior: NookHoverBehavior
+
+    /// The haptic played on hover changes when ``hoverBehavior`` contains
+    /// ``NookHoverBehavior/hapticFeedback``. ``NookHoverHaptic/standard`` (the `.alignment`
+    /// pattern) by default. Read on every hover change, so a new value takes effect from
+    /// the next one.
+    public var hoverHaptic: NookHoverHaptic = .standard
+
+    /// Performs hover haptics in place of the system's default performer. Tests set it to
+    /// record what was played.
+    var hapticPerformer: (any NSHapticFeedbackPerformer)?
+
+    /// Optional developer-configured dimming for the compact slots. `nil` keeps them at
+    /// full opacity. Read once when the surface is built.
     public let compactIdleDimming: NookCompactIdleDimming?
 
     public var transitionConfiguration = NookTransitionConfiguration()
@@ -115,7 +142,22 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// or react through the ``onExpand`` / ``onCompact`` / ``onHide`` callbacks - the
     /// callbacks fire on every transition, including hover- and drag-driven ones that
     /// never pass through a host-called `expand`/`compact`.
-    @Published public private(set) var state: NookState = .hidden
+    @Published public private(set) var state: NookState = .hidden {
+        didSet {
+            // A peek is a way of being compact; leaving compact ends it, on the same
+            // transaction (and so the same curve) as the state change itself.
+            if state != .compact {
+                if isPeeking { isPeeking = false }
+                peekStartedByHover = false
+                cancelHoverIntent()
+            }
+            // Shared elements move with the chrome, on the same transaction.
+            sharedElements.surfaceWillMove(
+                to: .onScreen(state: state, isPeeking: isPeeking),
+                animation: transitionConfiguration.sharedElementAnimation ?? effectiveConversionAnimation
+            )
+        }
+    }
     @Published private(set) var notchSize: CGSize = .zero
     @Published private(set) var menubarHeight: CGFloat = 0
     @Published private(set) var panelSize: CGSize = .zero
@@ -124,9 +166,36 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// Layout resolved for the current window's screen - `.notch` or `.floating`.
     /// Recomputed every time the panel window is built (see `initializeWindow`); drives
     /// `NookView`'s shape and positioning.
-    @Published private(set) var layoutForm: NookChromeForm = .notch
-    @Published public private(set) var isHovering: Bool = false
-    @Published public var staysExpandedOnHoverExit: Bool = false
+    ///
+    /// Readable (and `@Published`) so a host can paint for the layout the chrome actually
+    /// landed on rather than the ``presentation`` it asked for: `.auto` resolves to either
+    /// form depending on the screen, and a backdrop that reads as the hardware notch is only
+    /// right under ``NookChromeForm/notch``.
+    @Published public private(set) var layoutForm: NookChromeForm = .notch
+    @Published public private(set) var isHovering: Bool = false {
+        didSet {
+            if isHovering { hasDeferredHoverExit = false }
+        }
+    }
+
+    /// Holds the expanded chrome open when the pointer leaves it. Set it back to `false` and a
+    /// pointer that left while it was on collapses the chrome right away, as if it had just
+    /// left; a chrome the pointer never left (one opened from the keyboard, say) stays open.
+    @Published public var staysExpandedOnHoverExit: Bool = false {
+        didSet {
+            if oldValue, !staysExpandedOnHoverExit { replayDeferredHoverExit() }
+        }
+    }
+
+    /// `true` when the pointer left the expanded chrome while ``staysExpandedOnHoverExit`` or
+    /// layout grace held it open, so the collapse it would have caused is still owed. Paid by
+    /// ``replayDeferredHoverExit()`` once nothing holds the chrome open; forgotten when the
+    /// pointer comes back or the chrome leaves the expanded state.
+    var hasDeferredHoverExit = false
+
+    /// `true` while the chrome's panel has the keyboard, so typing goes to a text input in the
+    /// chrome rather than to the app in front. See ``takeKeyboardFocus()``.
+    @Published public private(set) var hasKeyboardFocus: Bool = false
 
     /// `true` while a layout-resize grace window is suppressing hover-exit auto-compact.
     /// Host coordinators can fold this into user-engagement signals so arbiter claims
@@ -137,9 +206,9 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// in the expanded surface and the auto-expand from compact. The panel surfaces
     /// `NSDraggingDestination` callbacks; this published bool is the SwiftUI-friendly view.
     ///
-    /// This is a derived mirror of ``dragSession`` - kept as the published surface for
+    /// This is a derived mirror of `dragSession` - kept as the published surface for
     /// observers (`AppCoordinator` subscribes to `$isDragInFlight`). The authoritative
-    /// session state is ``dragSession``; this bool is updated from its `didSet`.
+    /// session state is `dragSession`; this bool is updated from its `didSet`.
     @Published public private(set) var isDragInFlight: Bool = false
 
     /// Generic drag-destination callback: invoked when AppKit drops file URLs on the panel.
@@ -203,6 +272,135 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// What the chrome paints behind compact + expanded content - vibrancy or solid.
     @Published public var backdrop: NookBackdrop = .solidBlack
 
+    /// What companions set to ``NookCompanionBackdrop/inherit`` paint, or `nil` (the default)
+    /// for the chrome's own ``backdrop``.
+    ///
+    /// Set it when the chrome's backdrop is shaped for the tall chrome - a fade from the notch,
+    /// say - and would look wrong squeezed into a small pill. Companion content reads this
+    /// backdrop as `\.nookChromeBackdrop`, so a style or view that paints the backdrop itself
+    /// matches the companion's surface.
+    @Published public var companionBackdrop: NookBackdrop?
+
+    /// The backdrop companions set to ``NookCompanionBackdrop/inherit`` paint, and the one their
+    /// content reads as `\.nookChromeBackdrop`.
+    var inheritedCompanionBackdrop: NookBackdrop { companionBackdrop ?? backdrop }
+
+    /// Host surfaces floated beside the chrome and anchored to it - an action pill under the
+    /// expanded panel, a round button beside the compact pill. See ``NookCompanionSurface``.
+    ///
+    /// Empty by default, which renders the chrome exactly as it renders without the feature.
+    /// Replacing the array swaps the set in place: added companions play their presence as
+    /// they arrive, and removed ones play it as they leave and release any hover they held,
+    /// so a host switching content never leaves the surface pinned open by a companion that
+    /// is gone.
+    ///
+    /// Ids must be unique. A companion whose id an earlier one already has is dropped when the
+    /// array is set, since the id is the companion's identity and its hover key.
+    @Published public var companions: [NookCompanionSurface] = [] {
+        didSet {
+            let unique = NookCompanionSurface.removingDuplicateIDs(companions)
+            if unique.count != companions.count {
+                companions = unique
+            }
+            companionsDidChange()
+        }
+    }
+
+    /// How the chrome draws its glowing rim when content lights one with
+    /// `nookRimGlow(_:)`. The rim only appears while some content publishes a
+    /// color, so this style alone never draws anything. See ``NookRimGlowStyle``.
+    @Published public var rimGlowStyle: NookRimGlowStyle = .standard
+
+    /// A shadow cast by the chrome's outline onto the desktop, or `nil` (the default) for
+    /// none. It follows the outline as the chrome springs between compact and expanded, is
+    /// never drawn under the chrome itself (so a translucent backdrop is not darkened), and
+    /// in the notch form fades out across the menu bar, as the rim glow's halo does. See
+    /// ``NookChromeShadow``.
+    @Published public var chromeShadow: NookChromeShadow?
+
+    /// The shape of the wash expanded content paints with `nookAmbientColor(_:)`.
+    /// ``NookAmbientWash/standard`` by default. See ``NookAmbientWash``.
+    @Published public var ambientWash: NookAmbientWash = .standard
+
+    /// A panel-wide soft fade where scrolling content meets the panel's edges, or `nil` (the
+    /// default) for none. Published to the chrome's content as
+    /// `\.nookScrollEdgeFade`; each scroll view opts in with
+    /// `nookScrollEdgeFade(axes:)`, so turning this on never fades content
+    /// that is not scrolling.
+    @Published public var scrollEdgeFade: NookScrollEdgeFade?
+
+    /// The view the compact pill grows to show below its slots while it peeks: a song's
+    /// title and progress, a timer, a HUD. `nil` (the default) means the pill has no peek, so
+    /// ``peek(on:)`` does nothing and a ``NookHoverIntent/Action/peek`` hover opens the full
+    /// nook instead. Setting it to `nil` while peeking ends the peek.
+    ///
+    /// The view is sized by its content, up to ``NookStyle/peekMaxHeight`` tall, inside
+    /// ``NookStyle/peekContentInsets``.
+    @Published public var peekContent: AnyView? {
+        didSet {
+            if peekContent == nil, isPeeking {
+                withAnimation(effectivePeekAnimation) { isPeeking = false }
+                peekStartedByHover = false
+            }
+        }
+    }
+
+    /// `true` while the compact pill shows its peek region. The ``state`` stays
+    /// ``NookState/compact`` throughout; leaving compact ends the peek. See ``peek(on:)``.
+    @Published public internal(set) var isPeeking: Bool = false {
+        didSet {
+            // Leaving compact ends a peek inside the state change, which moves the elements.
+            guard state == .compact, isPeeking != oldValue else { return }
+            sharedElements.surfaceWillMove(
+                to: .onScreen(state: state, isPeeking: isPeeking),
+                animation: transitionConfiguration.sharedElementPeekAnimation ?? effectivePeekAnimation
+            )
+        }
+    }
+
+    /// Where the shared elements (``SwiftUI/View/nookSharedElement(_:style:)``) are drawn and
+    /// which ones are moving.
+    let sharedElements = NookSharedElementCoordinator()
+
+    /// What resting the pointer on the compact pill does. ``NookHoverIntent/standard`` (open
+    /// at once) by default.
+    public var hoverIntent: NookHoverIntent = .standard
+
+    /// `true` when the current peek was started by the pointer rather than by the host, so
+    /// the pointer leaving ends it. A host peek stays until ``endPeek()``.
+    var peekStartedByHover = false
+
+    /// A pending hover action (waiting out ``NookHoverIntent/delay``) or a pending dwell
+    /// (waiting out ``NookHoverIntent/dwellToExpand``). Cancelled when the pointer leaves or
+    /// the state leaves compact.
+    var hoverIntentTask: Task<Void, Never>?
+
+    /// `true` while the pointer is over the chrome's own shape. Tracked apart from companion
+    /// hover so the pointer crossing from the chrome onto a companion reads as one
+    /// continuous hover instead of an exit followed by an entry. See `Nook+Companions.swift`.
+    var isChromeHovered = false
+
+    /// Companions the pointer is currently over.
+    var hoveredCompanionIDs: Set<String> = []
+
+    /// The visibility each companion's content has narrowed itself to, keyed by companion id.
+    /// Absent means unrestricted.
+    var companionVisibilityRestrictions: [String: NookCompanionVisibility] = [:]
+
+    /// A pending hover exit, deferred while companions are on screen so the pointer can
+    /// cross the gap between the chrome and a companion (or between two companions).
+    var companionHoverExitTask: Task<Void, Never>?
+
+    /// How long a pointer may be off both the chrome and every companion before it counts
+    /// as a hover exit, while companions are shown.
+    var companionHoverExitGrace: Duration = .milliseconds(250)
+
+    /// The lowest point, in the panel's coordinates, each companion reaches.
+    var companionExtents: [String: CGFloat] = [:]
+
+    /// `true` while a panel resize to fit companions is queued for the next main-actor turn.
+    var isPanelGrowthScheduled = false
+
     /// Pins the chrome window's `NSAppearance`. `nil` follows the system appearance.
     ///
     /// This is the only thing that makes a forced light/dark theme render correctly: the
@@ -212,7 +410,7 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     ///
     /// **Deliberately not `@Published`** (unlike ``backdrop``). `NSAppearance` is an
     /// AppKit appearance proxy whose effect is the `NSWindow.appearance` set in
-    /// ``didSet`` - the SwiftUI content tree re-resolves its `colorScheme` from the
+    /// `didSet` - the SwiftUI content tree re-resolves its `colorScheme` from the
     /// hosting window automatically. There is no SwiftUI observer that would benefit
     /// from a Combine publish, so adding `@Published` would be theatrical motion
     /// without behavioural change.
@@ -227,13 +425,13 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
 
     /// Most recent peripheral-feedback request. The view layer (`NookFeedbackOverlay`) watches
     /// this; bumping it with a new `id` re-arms the animation. Internal because callers should
-    /// go through ``playFeedback(_:tint:duration:)`` rather than mutate directly.
+    /// go through ``playFeedback(_:tint:duration:repeats:)`` rather than mutate directly.
     @Published var feedbackEvent: NookFeedbackEvent?
 
     /// Feedback queued while the chrome wasn't visible (`.hidden` during the boot race, or
     /// reset path). Replayed when state next transitions to `.compact`. Cleared on a real
     /// `.expanded` transition because the user has by then acknowledged the surface directly.
-    private var pendingFeedback: NookFeedbackEvent?
+    private(set) var pendingFeedback: NookFeedbackEvent?
 
     /// Auto-clears a one-shot `feedbackEvent` once it has finished playing. Without this the
     /// overlay's `TimelineView(.animation)` keeps ticking at 60fps forever after the cue ends
@@ -243,13 +441,13 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     private var feedbackClearTask: Task<Void, Never>?
 
     /// The in-flight transition - expand, compact, *or hide* - or `nil` when idle.
-    /// ``runTransition(_:)`` cancels this before spawning a replacement, so a superseded
+    /// ``runTransition(toward:_:)`` cancels this before spawning a replacement, so a superseded
     /// transition's `Task.sleep` throws promptly instead of running to term. The hide
     /// teardown now runs as one of these tracked tasks (it used to live in a separate,
     /// untracked `closePanelTask` outside the generation system - see ``_hide(generation:)``).
     private var transitionTask: Task<Void, Never>?
 
-    /// Monotonic transition token. ``runTransition(_:)`` bumps it **synchronously** at
+    /// Monotonic transition token. ``runTransition(toward:_:)`` bumps it **synchronously** at
     /// each entry point - hover, drag, public `expand`/`compact` - so the token reflects
     /// call order, not the order tasks happen to start running. A transition re-checks
     /// it via ``isCurrent(_:)`` at its top and after every suspension, and bails if a
@@ -260,6 +458,17 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// One worker waits for this movable deadline. Geometry changes only push the
     /// deadline forward; they do not cancel and recreate a task on every animation frame.
     private var layoutGraceDeadline: ContinuousClock.Instant?
+    /// The state the in-flight transition is driving toward, or `nil` when none is.
+    /// Claimed synchronously alongside the generation and cleared when the transition
+    /// finishes, so it always describes the *current* generation's destination.
+    ///
+    /// The surface needs this because ``state`` alone cannot tell a settled surface
+    /// from one passing through the transient `.hidden` a compact <-> expanded
+    /// conversion dwells at: both read `.hidden`. Anything that interrupts a
+    /// transition (the screen-parameter observer, a window rebuild) consults the
+    /// target so it can re-drive the surface there instead of stranding it mid-flight
+    /// - see ``redriveInterruptedTransition(toward:)``.
+    private var transitionTarget: NookState?
 
     /// Auto-releases after expanded content resizes. Refreshed on each geometry change
     /// by moving ``layoutGraceDeadline`` while one worker remains active.
@@ -271,12 +480,8 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     var compactIdleDimmingTask: Task<Void, Never>?
     var compactIdleDimmingSurfaceState: NookState = .hidden
 
-    /// A hover exit landed while layout grace was active. The `.ended` event is gone by
-    /// the time grace expires, so the expiry must replay the collapse itself - otherwise
-    /// the surface stays expanded until the next full hover enter/exit cycle.
-    private var hasDeferredHoverExitCompact = false
-
-    private var cancellables = Set<AnyCancellable>()
+    /// Internal rather than private so the observers in `Nook+Companions.swift` share it.
+    var cancellables = Set<AnyCancellable>()
 
     public init(
         hoverBehavior: NookHoverBehavior = .all,
@@ -304,6 +509,8 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
         observeStateForLifecycleHooks()
         observeStateForLayoutGrace()
         observeStateForCompactIdleDimming()
+        observeStateForCompanions()
+        observeStateForKeyboardFocus()
     }
 
     /// Internal designated init for the no-compact-content case. The `disableCompact*`
@@ -337,6 +544,8 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
         observeStateForLifecycleHooks()
         observeStateForLayoutGrace()
         observeStateForCompactIdleDimming()
+        observeStateForCompanions()
+        observeStateForKeyboardFocus()
     }
 
     /// Convenience for the no-compact-content case. Compact mode collapses to hide.
@@ -366,6 +575,7 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     var effectiveConversionAnimation: Animation {
         transitionConfiguration.conversionAnimation ?? style.conversionAnimation
     }
+    var effectivePeekAnimation: Animation { transitionConfiguration.peekAnimation ?? effectiveConversionAnimation }
 
     /// When the chrome becomes visible (state transitions out of `.hidden`), replay any
     /// feedback that was requested during the boot race. Single sink keeps lifetime tied
@@ -417,6 +627,9 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
             .removeDuplicates()
             .sink { [weak self] newState in
                 guard let self, newState != .expanded else { return }
+                // Forgotten first: `$state` publishes before the new state is stored, so ending
+                // the grace must not find an owed exit and collapse a chrome already leaving.
+                self.hasDeferredHoverExit = false
                 self.endLayoutGrace()
             }
             .store(in: &cancellables)
@@ -463,8 +676,13 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                     // No window worth keeping while hidden. Supersede any in-flight
                     // transition first so a mid-flight `_expand`/`_compact`/`_hide`
                     // can't keep operating on the window we're about to tear down.
-                    self.supersedeInFlightTransition()
+                    let interrupted = self.supersedeInFlightTransition()
                     self.deinitializeWindow()
+                    // `.hidden` here does not mean "settled": a conversion dwells at
+                    // `.hidden` mid-flight. Re-drive to whatever that transition was
+                    // aiming for (on the then-current screen, rebuilding the window we
+                    // just dropped), rather than stranding the surface invisible.
+                    self.redriveInterruptedTransition(toward: interrupted)
                     return
                 }
                 guard let screen = self.resolvedScreen else { return }
@@ -500,22 +718,28 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
         guard hovering != isHovering else { return }
 
         isHovering = hovering
+        performHoverHapticIfEnabled()
+        cancelHoverIntent()
 
-        if hoverBehavior.contains(.hapticFeedback) {
-            let performer = NSHapticFeedbackManager.defaultPerformer
-            performer.perform(.alignment, performanceTime: .default)
+        // Any intent but the standard one waits, peeks, or does nothing; see `Nook+Peek.swift`.
+        // The standard intent takes the path below, exactly as before intents existed.
+        if hovering, hoverIntent != .standard {
+            hoverEntered()
+            return
+        }
+        // Leaving a peek ends it if the pointer started it; a host's peek stays.
+        if !hovering, state == .compact, isPeeking {
+            if peekStartedByHover { runEndPeek() }
+            return
         }
 
         guard hovering || !suppressesHoverExitCompact else {
-            // A grace-deferred exit replays when the window expires; a
-            // `staysExpandedOnHoverExit` exit is swallowed by design and never replays.
-            hasDeferredHoverExitCompact = !staysExpandedOnHoverExit
+            if state == .expanded { hasDeferredHoverExit = true }
             return
         }
-        hasDeferredHoverExitCompact = false
 
         guard let screen = windowController?.window?.screen ?? resolvedScreen else { return }
-        runTransition { [weak self] generation in
+        runTransition(toward: hovering ? .expanded : .compact) { [weak self] generation in
             guard let self else { return }
             if hovering {
                 await self._expand(on: screen, skipHide: true, generation: generation)
@@ -523,6 +747,35 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
                 await self._compact(on: screen, skipHide: true, generation: generation)
             }
         }
+    }
+
+    /// Collapses the chrome for a hover exit that a hold deferred, once no hold is left. Does
+    /// nothing when no exit is owed, when the pointer has come back to the chrome or a companion,
+    /// or while a file drag is over the panel.
+    func replayDeferredHoverExit() {
+        guard hasDeferredHoverExit, !suppressesHoverExitCompact else { return }
+        hasDeferredHoverExit = false
+        guard state == .expanded, !isHovering, !isDragInFlight,
+            let screen = windowController?.window?.screen ?? resolvedScreen
+        else { return }
+        runTransition(toward: .compact) { [weak self] generation in
+            await self?._compact(on: screen, skipHide: true, generation: generation)
+        }
+    }
+
+    /// Writes ``isHovering`` without the hover-grow or hover-exit transition that
+    /// ``updateHoverState(_:)`` drives. The setter is private to this file; companion hover
+    /// (`Nook+Companions.swift`) needs exactly this narrow write and nothing more.
+    func setHoveringWithoutTransition(_ hovering: Bool) {
+        isHovering = hovering
+    }
+
+    /// The hover haptic, when ``hoverBehavior`` asks for one. Shared by chrome and companion
+    /// hover so both feel the same.
+    func performHoverHapticIfEnabled() {
+        guard hoverBehavior.contains(.hapticFeedback) else { return }
+        let performer = hapticPerformer ?? NSHapticFeedbackManager.defaultPerformer
+        performer.perform(hoverHaptic.pattern, performanceTime: hoverHaptic.performanceTime)
     }
 
     /// Claims the next transition generation **synchronously**, cancels any in-flight
@@ -537,15 +790,27 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// In particular a hover- or drag-driven `expand` cancels an in-flight hide's
     /// teardown before it can deinit the window out from under the freshly-expanded
     /// surface.
+    ///
+    /// `target` is the state `body` drives the surface to. It is recorded alongside the
+    /// generation so an interrupting window swap can re-drive the surface there rather
+    /// than leave it wherever the superseded transition happened to stop - see
+    /// ``redriveInterruptedTransition(toward:)``.
     @discardableResult
-    func runTransition(_ body: @escaping @MainActor (_ generation: Int) async -> Void) -> Task<Void, Never> {
+    func runTransition(
+        toward target: NookState,
+        _ body: @escaping @MainActor (_ generation: Int) async -> Void
+    ) -> Task<Void, Never> {
         transitionGeneration &+= 1
         let generation = transitionGeneration
         transitionTask?.cancel()
+        transitionTarget = target
         let task = Task { @MainActor [weak self] in
             await body(generation)
             // Only clear the handle if no newer transition has replaced it.
-            if let self, self.transitionGeneration == generation { self.transitionTask = nil }
+            if let self, self.transitionGeneration == generation {
+                self.transitionTask = nil
+                self.transitionTarget = nil
+            }
         }
         transitionTask = task
         return task
@@ -556,7 +821,8 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     func isCurrent(_ generation: Int) -> Bool { transitionGeneration == generation }
 
     /// Claim a fresh transition generation **synchronously** and cancel any in-flight
-    /// transition, without spawning a replacement.
+    /// transition, without spawning a replacement. Returns the state that transition was
+    /// driving toward, or `nil` when none was in flight.
     ///
     /// Used by the synchronous window-swap paths (`presentation.didSet`, the
     /// screen-parameter observer) which rebuild or drop the window outside of
@@ -564,53 +830,171 @@ where Expanded: View, CompactLeading: View, CompactTrailing: View {
     /// mid-flight `_expand`/`_compact`/`_hide` re-checks `isCurrent` after each
     /// suspension and bails the instant the window is rebuilt under it, rather than
     /// animating (or deinit'ing) a window that has already been swapped.
-    func supersedeInFlightTransition() {
+    ///
+    /// Bailing is only half the job, though: the interrupted transition stops wherever
+    /// it was, which may be the transient `.hidden` a conversion passes through. Callers
+    /// hand the returned target to ``redriveInterruptedTransition(toward:)`` so the
+    /// surface still arrives where it was asked to go.
+    @discardableResult
+    func supersedeInFlightTransition() -> NookState? {
         transitionGeneration &+= 1
         transitionTask?.cancel()
         transitionTask = nil
+        let interrupted = transitionTarget
+        transitionTarget = nil
+        return interrupted
+    }
+
+    /// Restart a transition a synchronous window swap superseded, so the surface lands on
+    /// the state it was asked for instead of stranding where the supersession caught it.
+    ///
+    /// The stranding this exists to prevent: a compact -> expanded conversion sets
+    /// `state = .hidden` for ``intermediateHideDuration`` before animating in the
+    /// expanded chrome. A screen-parameter change landing in that window used to tear the
+    /// panel down and return, leaving a surface that reads `.hidden` with no transition in
+    /// flight and no window - invisible until the host happened to ask again.
+    ///
+    /// A `nil` target means nothing was in flight. A target the surface already sits at
+    /// means the transition had effectively arrived, so there is nothing left to drive -
+    /// this is also what keeps a genuine ``hide()`` at `.hidden`: its target *is* hidden,
+    /// unlike the transient hide inside a conversion.
+    func redriveInterruptedTransition(toward target: NookState?) {
+        guard let target, state != target else { return }
+
+        switch target {
+            case .hidden:
+                runTransition(toward: .hidden) { [weak self] generation in
+                    await self?._hide(generation: generation)
+                }
+            case .expanded, .compact:
+                // Re-place on the *then-current* screen rather than the one the
+                // interrupted transition targeted: the swap is usually a display change,
+                // so that screen may be gone or rearranged.
+                guard let screen = resolvedScreen else { return }
+                let skipHide = transitionConfiguration.skipIntermediateHides
+                runTransition(toward: target) { [weak self] generation in
+                    if target == .expanded {
+                        await self?._expand(on: screen, skipHide: skipHide, generation: generation)
+                    } else {
+                        await self?._compact(on: screen, skipHide: skipHide, generation: generation)
+                    }
+                }
+        }
     }
 
     /// Rebuild a currently-visible window in place (new screen, new presentation) so the
     /// new layout takes effect immediately. Supersedes any in-flight transition first so
     /// it can't keep mutating the window being swapped - see ``supersedeInFlightTransition()``.
     func rebuildVisibleWindow(on screen: NSScreen) {
-        supersedeInFlightTransition()
+        let interrupted = supersedeInFlightTransition()
+        // The old panel hands the keyboard back as it closes; an expanded chrome that had it
+        // takes it again in the new panel, so a display change does not cut off typing.
+        let hadKeyboardFocus = hasKeyboardFocus && state == .expanded
         initializeWindow(screen: screen, orderFront: false)
         showWindow()
+        if hadKeyboardFocus {
+            takeKeyboardFocus()
+        }
+        // The rebuilt window shows whatever state the supersession froze - which is not
+        // necessarily the one the caller asked for. Finish the interrupted transition on
+        // the new window.
+        redriveInterruptedTransition(toward: interrupted)
     }
 }
 
 // MARK: - Public lifecycle
 
 extension Nook {
-    /// Expand the chrome. Pass `nil` (the default) to let ``resolvedScreen`` pick the
+    /// Expand the chrome. Pass `nil` (the default) to let `resolvedScreen` pick the
     /// target - typically the host's persisted display preference via ``screenProvider``.
     public func expand(on screen: NSScreen? = nil) async {
         guard let target = screen ?? resolvedScreen else { return }
         let skipHide = transitionConfiguration.skipIntermediateHides
-        await runTransition { [weak self] generation in
+        await runTransition(toward: .expanded) { [weak self] generation in
             await self?._expand(on: target, skipHide: skipHide, generation: generation)
         }.value
     }
 
     /// Collapse the chrome to its compact pill. Pass `nil` (the default) to let
-    /// ``resolvedScreen`` pick the target.
+    /// `resolvedScreen` pick the target.
     public func compact(on screen: NSScreen? = nil) async {
         guard let target = screen ?? resolvedScreen else { return }
         let skipHide = transitionConfiguration.skipIntermediateHides
-        await runTransition { [weak self] generation in
+        await runTransition(toward: .compact) { [weak self] generation in
             await self?._compact(on: target, skipHide: skipHide, generation: generation)
         }.value
     }
 
-    /// Hide the chrome and tear the window down. Routed through ``runTransition(_:)`` -
+    /// Hide the chrome and tear the window down. Routed through `runTransition(_:)` -
     /// exactly like `expand`/`compact` - so the hide and its teardown live fully inside
     /// the generation system: a newer transition reliably supersedes an in-flight hide,
     /// cancelling its task before its `fadeOutWindow`/`deinitializeWindow` can run.
     public func hide() async {
-        await runTransition { [weak self] generation in
+        await runTransition(toward: .hidden) { [weak self] generation in
             await self?._hide(generation: generation)
         }.value
+    }
+}
+
+// MARK: - Keyboard focus
+
+extension Nook {
+    /// Gives the chrome's panel the keyboard, so typing goes to its focused text input instead of
+    /// the app in front. The app in front stays in front: the panel never activates the app.
+    ///
+    /// A click on anything in the chrome already does this, so call it when typing should reach
+    /// the chrome without a click - a text input focused when content appears, or after a
+    /// shortcut opened the chrome. Returns `false` while the chrome is hidden.
+    ///
+    /// The chrome hands the keyboard back by itself when it collapses or hides, and a text input
+    /// in it gives up focus when the person clicks into another app.
+    @discardableResult
+    public func takeKeyboardFocus() -> Bool {
+        guard state != .hidden, let window = windowController?.window else { return false }
+        if !window.isKeyWindow {
+            window.makeKey()
+        }
+        return window.isKeyWindow
+    }
+
+    /// Hands the keyboard back to the app in front, ending editing in any focused text input.
+    /// Does nothing while the chrome does not have the keyboard.
+    public func releaseKeyboardFocus() {
+        guard let panel = windowController?.window as? NookPanel, panel.isKeyWindow else { return }
+        panel.endTextEditing()
+        Self.returnKeyboardToAppInFront(from: panel)
+    }
+
+    /// Returns the keyboard to the app in front. The panel never activates the app, so when
+    /// another app is in front, giving up this app's claim on the keyboard hands it straight
+    /// back, without reordering any windows. When this app is the one in front - a host with a
+    /// window of its own, say - the keyboard goes to that window instead.
+    static func returnKeyboardToAppInFront(from panel: NSWindow) {
+        let isFrontmost =
+            NSWorkspace.shared.frontmostApplication?.processIdentifier
+            == ProcessInfo.processInfo.processIdentifier
+        if isFrontmost,
+            let window = NSApp.orderedWindows.first(where: {
+                $0 !== panel && $0.isVisible && $0.canBecomeKey && !($0 is NSPanel)
+            })
+        {
+            window.makeKey()
+        } else {
+            NSApp.deactivate()
+        }
+    }
+
+    /// Hands the keyboard back whenever the chrome leaves the expanded state, so typing never
+    /// goes to a collapsed or hidden chrome. `$state` publishes before the new state is stored,
+    /// so the new state is passed along rather than read back.
+    func observeStateForKeyboardFocus() {
+        $state
+            .removeDuplicates()
+            .sink { [weak self] newState in
+                guard let self, newState != .expanded, self.hasKeyboardFocus else { return }
+                self.releaseKeyboardFocus()
+            }
+            .store(in: &cancellables)
     }
 }
 
@@ -624,9 +1008,29 @@ extension Nook {
     /// timing - no internal queueing or debouncing; rapid successive calls re-anchor
     /// `startedAt` and the in-flight animation restarts. A cue requested while the chrome
     /// is hidden is queued and replayed the next time the nook becomes visible.
+    ///
+    /// `tint` colors the cue in the built-in ``NookFeedbackStyle/standard`` look; use
+    /// ``playFeedback(_:style:duration:repeats:)`` to change more than the color.
     public func playFeedback(
         _ effect: NookFeedback = .shimmer,
         tint: Color = Color(nsColor: .controlAccentColor),
+        duration: TimeInterval = 0.85,
+        repeats: Bool = false
+    ) {
+        var style = NookFeedbackStyle.standard
+        style.color = tint
+        playFeedback(effect, style: style, duration: duration, repeats: repeats)
+    }
+
+    /// Play a peripheral cue drawn in `style` - its color or band gradient, line width,
+    /// glow, and blend mode. Otherwise the same as ``playFeedback(_:tint:duration:repeats:)``.
+    ///
+    /// ```swift
+    /// nook.playFeedback(.pulse, style: NookFeedbackStyle(color: .orange, glow: nil))
+    /// ```
+    public func playFeedback(
+        _ effect: NookFeedback = .shimmer,
+        style: NookFeedbackStyle,
         duration: TimeInterval = 0.85,
         repeats: Bool = false
     ) {
@@ -637,7 +1041,7 @@ extension Nook {
             startedAt: Date(),
             effect: effect,
             duration: duration,
-            tint: tint,
+            style: style,
             respectsReduceMotion: true,
             repeats: repeats
         )
@@ -687,7 +1091,7 @@ extension Nook {
     /// conversion animation finish - so an awaited `expand()` returns once the chrome
     /// has visibly arrived, not after an unrelated fixed delay.
     ///
-    /// `generation` is the token claimed synchronously by ``runTransition(_:)``. The
+    /// `generation` is the token claimed synchronously by ``runTransition(toward:_:)``. The
     /// method bails the instant a newer transition supersedes it: at its top (covering
     /// a task that was queued but overtaken before it ran) and after each suspension.
     func _expand(on screen: NSScreen, skipHide: Bool, generation: Int) async {
@@ -719,6 +1123,7 @@ extension Nook {
             withAnimation(effectiveOpeningAnimation) { state = .expanded }
             showWindow()
             try? await Task.sleep(for: openSettleDuration)
+            await awaitContentArrival(for: .expanded)
             // A screen-parameter change during the settle could have rebuilt the
             // window underneath us; bail rather than return success on a defunct view.
             // `Task.isCancelled` belt-and-suspenders matches `_hide`'s pattern - a
@@ -727,7 +1132,8 @@ extension Nook {
             // bail condition robust against any future cancellation path.
             guard isCurrent(generation), !Task.isCancelled else { return }
         } else {
-            if !skipHide {
+            // A shared element on screen cannot move across a moment where the chrome is gone.
+            if !skipHide, !sharedElements.holdsElements {
                 withAnimation(effectiveClosingAnimation) { state = .hidden }
                 try? await Task.sleep(for: intermediateHideDuration)
                 // A newer transition may have superseded us across the sleep.
@@ -735,6 +1141,7 @@ extension Nook {
             }
             withAnimation(effectiveConversionAnimation) { state = .expanded }
             try? await Task.sleep(for: conversionSettleDuration)
+            await awaitContentArrival(for: .expanded)
             guard isCurrent(generation), !Task.isCancelled else { return }
         }
     }
@@ -765,21 +1172,24 @@ extension Nook {
             withAnimation(effectiveOpeningAnimation) { state = .compact }
             showWindow()
             try? await Task.sleep(for: openSettleDuration)
+            await awaitContentArrival(for: .compact)
             guard isCurrent(generation), !Task.isCancelled else { return }
         } else {
-            if !skipHide {
+            // A shared element on screen cannot move across a moment where the chrome is gone.
+            if !skipHide, !sharedElements.holdsElements {
                 withAnimation(effectiveClosingAnimation) { state = .hidden }
                 try? await Task.sleep(for: intermediateHideDuration)
                 guard isCurrent(generation), !Task.isCancelled, state == .hidden else { return }
             }
             withAnimation(effectiveConversionAnimation) { state = .compact }
             try? await Task.sleep(for: conversionSettleDuration)
+            await awaitContentArrival(for: .compact)
             guard isCurrent(generation), !Task.isCancelled else { return }
         }
     }
 
     /// Hide the chrome and tear the window down. Runs as a tracked transition under
-    /// ``runTransition(_:)`` - `generation` is the token it claimed synchronously.
+    /// ``runTransition(toward:_:)`` - `generation` is the token it claimed synchronously.
     ///
     /// Because the hide now lives fully inside the generation system, every step
     /// re-checks ``isCurrent(_:)`` after each suspension point: a newer transition
@@ -820,6 +1230,9 @@ extension Nook {
             state = .hidden
             isHovering = false
         }
+        // The hover flag is cleared by hand here, so the per-source hover it summarizes has
+        // to go with it; a deferred companion exit must not fire into the hidden surface.
+        resetHoverSources()
 
         try? await Task.sleep(for: intermediateHideDuration)
         // A newer transition took over across the close-animation dwell - it owns the
@@ -900,6 +1313,29 @@ extension Nook {
         .seconds(settleAnimationDuration)
     }
 
+    /// How long content that arrives late keeps an awaited transition toward `state` from
+    /// returning, after the chrome's own settle: the content transition's enter delay, plus the
+    /// host's ``NookTransitionConfiguration/expandedEntranceDuration`` for expanded content.
+    /// Zero by default, and never part of the visible timing: only the `await` waits for it.
+    func contentArrivalDuration(for state: NookState) -> Duration {
+        let seconds: TimeInterval =
+            switch state {
+                case .expanded:
+                    transitionConfiguration.expandedContentTransition.delay
+                        + max(transitionConfiguration.expandedEntranceDuration, 0)
+                case .compact: transitionConfiguration.compactContentTransition.delay
+                case .hidden: 0
+            }
+        return .seconds(seconds)
+    }
+
+    /// Waits out ``contentArrivalDuration(for:)`` for `state`, when it is not zero.
+    func awaitContentArrival(for state: NookState) async {
+        let duration = contentArrivalDuration(for: state)
+        guard duration > .zero else { return }
+        try? await Task.sleep(for: duration)
+    }
+
     /// Dwell at `.hidden` between a close animation and the following conversion (or
     /// teardown), when intermediate hides are not skipped. A partial dwell of the
     /// closing animation - the chrome need not be fully gone before the next phase
@@ -924,6 +1360,8 @@ extension Nook {
     }
 
     /// Hover-exit auto-compact is suppressed while a presentation pin or layout grace is active.
+    /// A hover exit suppressed this way is owed and replays when the suppression lifts - see
+    /// ``replayDeferredHoverExit()``.
     var suppressesHoverExitCompact: Bool {
         staysExpandedOnHoverExit || isLayoutGraceActive
     }
@@ -960,7 +1398,7 @@ extension Nook {
                     if self.isLayoutGraceActive {
                         self.isLayoutGraceActive = false
                     }
-                    self.resumeDeferredHoverExitCompact()
+                    self.replayDeferredHoverExit()
                     return
                 }
             }
@@ -976,23 +1414,7 @@ extension Nook {
         layoutGraceTask?.cancel()
         layoutGraceTask = nil
         if isLayoutGraceActive { isLayoutGraceActive = false }
-        // Leaving `.expanded` (or a zero-duration grace) makes any deferred exit moot;
-        // dropping it here keeps a later grace cycle from replaying a stale collapse.
-        hasDeferredHoverExitCompact = false
-    }
-
-    /// Completes a hover-exit collapse that ``updateHoverState(_:withinInteractionRegion:)``
-    /// deferred while layout grace was active. Runs only on natural grace expiry.
-    private func resumeDeferredHoverExitCompact() {
-        guard hasDeferredHoverExitCompact else { return }
-        hasDeferredHoverExitCompact = false
-        guard state == .expanded, !isHovering, !suppressesHoverExitCompact else { return }
-
-        guard let screen = windowController?.window?.screen ?? resolvedScreen else { return }
-        runTransition { [weak self] generation in
-            guard let self else { return }
-            await self._compact(on: screen, skipHide: true, generation: generation)
-        }
+        replayDeferredHoverExit()
     }
 
     /// The layer of the hosting view inside the panel. Layer-level fades run here so the
@@ -1011,11 +1433,18 @@ extension Nook {
         notchSize = screen.notchFrameWithMenubarAsBackup.size
         menubarHeight = screen.menubarHeight
         layoutForm = presentation.isFloating(screenHasNotch: screen.hasNotch) ? .floating : .notch
-        let windowSize = NSSize(
+        // Extents were measured in the window being replaced; the new one re-reports them.
+        companionExtents.removeAll()
+
+        let size = NSSize(
             width: screen.frame.width,
             height: screen.frame.height / 2
         )
-        panelSize = windowSize
+        panelSize = size
+        let origin = NSPoint(
+            x: screen.frame.midX - (size.width / 2),
+            y: screen.frame.maxY - size.height
+        )
 
         // Two modifiers used to live on a `NookContentView` shim: a full-bleed
         // top-anchored frame and a conversion animation on hover. Inlining the
@@ -1042,13 +1471,18 @@ extension Nook {
         container.wantsLayer = true
         container.addSubview(hostingView)
         container.addSubview(dragInterceptor)
+        let dragRegionHeight = dragInterceptor.heightAnchor.constraint(equalToConstant: size.height)
         NSLayoutConstraint.activate([
             hostingView.topAnchor.constraint(equalTo: container.topAnchor),
             hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             hostingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             hostingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             dragInterceptor.topAnchor.constraint(equalTo: container.topAnchor),
-            dragInterceptor.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            // Pinned to the panel's starting height rather than its bottom edge. The panel
+            // only ever grows to make room for companion surfaces (see
+            // `growPanelToFitCompanions`), and the file-drag region must stay the top half
+            // of the screen it has always been rather than grow with it.
+            dragRegionHeight,
             dragInterceptor.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             dragInterceptor.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
@@ -1061,13 +1495,15 @@ extension Nook {
         )
         panel.contentView = container
         panel.appearance = chromeAppearance
+        panel.onKeyStatusChange = { [weak self] isKey in
+            guard let self, self.hasKeyboardFocus != isKey else { return }
+            self.hasKeyboardFocus = isKey
+        }
 
-        let origin = NSPoint(
-            x: screen.frame.midX - (windowSize.width / 2),
-            y: screen.frame.maxY - windowSize.height
-        )
-
-        panel.setFrame(NSRect(origin: origin, size: windowSize), display: false)
+        panel.setFrame(NSRect(origin: origin, size: size), display: false)
+        // AppKit rounds the frame to whole points; match the drag region to the panel it
+        // actually got, as the bottom-pinned region always did.
+        dragRegionHeight.constant = panel.frame.height
         panel.layoutIfNeeded()
 
         if orderFront {
@@ -1113,9 +1549,20 @@ extension Nook {
         backSwipeMonitor?.stop()
         backSwipeMonitor = nil
 
+        // The views that reported hover are going away with the window, and SwiftUI does
+        // not report an exit for a view it tears down.
+        resetHoverSources()
         guard let windowController else { return }
+        if let panel = windowController.window as? NookPanel {
+            panel.onKeyStatusChange = nil
+            if panel.isKeyWindow {
+                panel.endTextEditing()
+                Self.returnKeyboardToAppInFront(from: panel)
+            }
+        }
         windowController.close()
         self.windowController = nil
+        if hasKeyboardFocus { hasKeyboardFocus = false }
     }
 }
 

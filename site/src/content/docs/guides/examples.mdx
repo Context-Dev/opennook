@@ -1,13 +1,13 @@
 ---
 title: Examples
-description: An index of the nine single-file example apps under Examples/, each linked to the guide that covers it
+description: An index of the twelve example apps under Examples/, each linked to the guide that covers it
 ---
 
-Every example under `Examples/` is a single-file host that builds on OpenNook's
-public API only - no forking, no patched framework. Each one is its own SPM
-target, so you run it straight from the repo with `swift run <Name>` and press
-the show/hide hotkey (the default is the option-command-semicolon combination)
-to expand the nook.
+Every example under `Examples/` is a host that builds on OpenNook's public API
+only - no forking, no patched framework. All but the playground and the showcase fit in a single
+`main.swift`. Each one is its own SPM target, so you run it straight from the repo
+with `swift run <Name>` and press the show/hide hotkey (the default is the
+option-command-semicolon combination) to expand the nook.
 
 They are grouped here so you can jump to the one closest to what you are
 building. Each entry links to the guide that explains the concept in full.
@@ -29,17 +29,34 @@ here if you have never run an OpenNook app.
 Reshaping the chrome - palette, lifecycle hooks, brand mark, layout - through
 `NookConfiguration`.
 
+- **PlaygroundNook** - `swift run PlaygroundNook`. A live customization
+  playground: a controls window changes the running nook's appearance, theme,
+  size and shape, type and motion, top bar, companions, rim glow, scroll edge
+  fade, and hover behavior, then exports the result as Swift that sets only what
+  changed, or as a JSON preset. Start here to explore the other seams. See
+  [Playground](/guides/playground/).
 - **ThemedNook** - `swift run ThemedNook`. A host-supplied `NookResolvedTheme`
   that paints the chrome labels, plus the `onExpand` / `onCompact` lifecycle
   callbacks. See [Theming](/guides/theming/).
 - **ChromeNook** - `swift run ChromeNook`. A tour of the deeper chrome seams:
-  launch-preference defaults, hover and backdrop behavior, label and metric
-  overrides, a custom brand mark, top-bar trailing actions, and the status
-  banner. See [Chrome customization](/guides/chrome-customization/).
+  launch-preference defaults, hover behavior and the notch fade for Liquid Glass,
+  a note field the global shortcut types straight into, label and metric
+  overrides, a custom brand mark and menu-bar icon, a Settings screen without its
+  Data group, top-bar trailing actions, and the status banner. See
+  [Chrome customization](/guides/chrome-customization/) and
+  [Typing in the nook](/guides/keyboard/).
 - **LayoutNook** - `swift run LayoutNook`. The recommended expanded-width and
   content-inset patterns - how a home view reads `\.nookContentInsets` instead
   of adding its own horizontal padding. See
   [Layout and content insets](/guides/layout-and-insets/).
+- **CompanionNook** - `swift run CompanionNook`. A media player with companion
+  surfaces floating below it - a pill of section buttons and a round sleep-timer
+  button, the same height through the shared companion size - plus the lock and gear
+  moved into a capsule beside it, a speaker chip that a `NookCompanionSource` adds
+  and removes while the app runs, a rim that glows blue while the timer runs, and
+  lists that fade at the panel's edges. See
+  [Companion surfaces](/guides/companion-surfaces/) and
+  [Rim glow and edge fade](/guides/panel-effects/).
 
 ## Components
 
@@ -57,14 +74,36 @@ Drop-in surfaces from the `NookComponents` add-on. Each imports
   `NookVolumeIndicator` renders it beside the notch. See
   [Volume glyph](/guides/volume-glyph/).
 
+## Showcase
+
+Several seams put together the way a shipping notch app would.
+
+- **ShowcaseNook** - `swift run ShowcaseNook --scene <id>`. Finished-looking
+  scenes, one per launch: a player with cover art drawn in code and its queue
+  (`player`), a month beside today's schedule (`agenda`), a focus countdown on a
+  tick dial (`timer`), a release build step by step that posts an activity when
+  it finishes (`progress`), the file shelf holding sample files (`shelf`), a
+  volume HUD over `SystemVolumeObserver` (`hud`), and a collapsed pill carrying
+  a song and a timer (`compact`), and a board with a widget from the player,
+  the agenda, and the timer (`board`). The cover and the time move between the
+  pill and the panel as shared elements. `--expand` or `--expand-after <seconds>`
+  opens the nook and `--keep-open` holds it. See
+  [Companion surfaces](/guides/companion-surfaces/),
+  [Activity queue](/guides/activity-queue/),
+  [File shelf](/guides/file-shelf/),
+  [Widgets and boards](/guides/widgets-and-boards/), and
+  [Shared elements](/guides/shared-elements/).
+
 ## Hosting
 
 Running more than one notch app in a single process.
 
 - **MultiNook** - `swift run MultiNook`. One host process with several
   interchangeable modules sharing one surface, switched through the menu bar,
-  the cycle hotkey, or an in-surface switcher. See
-  [Multiple modules](/guides/multiple-modules/).
+  the cycle hotkey, or an in-surface switcher. It opens on a board that shows a
+  widget from each of the other modules. See
+  [Multiple modules](/guides/multiple-modules/) and
+  [Widgets and boards](/guides/widgets-and-boards/).
 
 ## See also
 

@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Glendon Chin
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// A copy is included at /LICENSE in the repository root.
+// Licensed under the MIT License.
+// Modifications license: /LICENSE-MIT-NOOKSURFACE
 
 import XCTest
 
@@ -121,7 +120,7 @@ final class NookContentInsetsTests: XCTestCase {
         let insets = NookContentInsets.expanded(
             form: .notch,
             topCornerRadius: 19,
-            bottomCornerRadius: 8, // == the bottom/leading/trailing inset
+            bottomCornerRadius: 8,  // == the bottom/leading/trailing inset
             chromeSafeAreaInsets: chromeSafeAreaInsets
         )
         XCTAssertEqual(insets.leading, 0, "horizontal residual must floor at 0")

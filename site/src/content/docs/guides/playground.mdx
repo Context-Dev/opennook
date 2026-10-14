@@ -1,0 +1,422 @@
+---
+title: Playground
+description: Change the nook's look and behavior while it runs in PlaygroundNook, then export the result as Swift or a JSON preset
+---
+
+`Examples/PlaygroundNook` is a live customization playground. A controls window
+beside the running nook changes its appearance, theme, size and shape, type and
+motion, top bar, companion surfaces, rim glow, scroll edge fade, and hover
+behavior - and, on the Tokens page, any single theme token - and the real nook - not
+a mock - updates as you go. When it looks right, copy the result as Swift that sets
+only what you changed, save it as a JSON preset to share or open later, or copy the
+theme alone as a theme file.
+
+```sh
+swift run PlaygroundNook
+```
+
+## The window
+
+The playground opens a regular, resizable window next to the nook. The nook starts
+as the stock chrome, so everything you see change is something you changed.
+
+- The **sidebar** lists the pages. A dot marks a page with changes, and
+  right-clicking a page resets it.
+- At the top right, **Keep Open** holds the nook open while you work in the window,
+  **Expand** opens or collapses the nook, and **Code** shows or hides the code.
+- The **code** on the right is the Swift snippet or the JSON preset for what you have
+  now, updated as you change it, with a button to copy it.
+
+Each page groups its settings into cards, with one control column so every control
+lines up. Settings most people leave alone - content insets, metrics, extra theme
+colors, the chrome's labels - are folded into a row until you open it; a dot on the row
+means something inside has changed. Hover a label or an info icon to see what it does.
+A changed value shows a reset arrow beside its label, a changed card shows **Reset**,
+and applying a preset or resetting a page can be undone from the confirmation at the
+bottom of the window. The window follows the Mac's light or dark appearance.
+
+The controls are in a window rather than in the nook itself: the nook changes
+shape as you edit it, collapses when the pointer leaves, and has no room for text
+fields and color pickers. While the window is open the playground is a regular app
+with a Dock icon and a menu bar, so Command-Tab reaches it and text fields get the
+usual editing shortcuts. Closing the window returns it to a menu-bar-only app; the
+**Controls** button in the nook brings the window back.
+
+Two launch options help when you try presets:
+
+```sh
+swift run PlaygroundNook --preset my-preset.json   # open a preset at launch
+swift run PlaygroundNook --sample glass            # media, glass, glance, call, or defaults
+swift run PlaygroundNook --expand                  # open the nook at launch
+swift run PlaygroundNook --keep-open               # hold the nook expanded
+swift run PlaygroundNook --hide-controls           # skip the controls window
+```
+
+## What you can change
+
+| Page | Changes | Lands on |
+|---|---|---|
+| Appearance | layout, palette, material, backdrop strength, accent, haptics; under **Opening**, what hovering the pill does and its waits | `AppState.appearancePreferences` |
+| Theme | font design and width; corner, scale, and motion knobs; accent, label, fill, stroke, hover, status, and inactive icon colors; the backdrop of each material (framework, solid, frosted, Liquid Glass with its variant, linear, radial, elliptical, and angular gradients, mesh) and the theme's glass shading; under **Theme File**, the name, pins, sound volume, and what the person may change | `NookConfiguration.chromeTheme` |
+| Panel | expanded width, corner radii, content insets, a few metrics | `expandedWidth`, `style`, `metrics` |
+| Type and Motion | four typography roles, the Settings and banner springs | `typography`, `motion` |
+| Top Bar | top bar and Settings switches, width, leading title and icon, notch clearance, labels and the Settings group titles, the lock, gear, separator, and back symbols | `topBar`, `topBar.symbols`, `labels` |
+| Companions | the size, look, and entrance every companion shares; add, duplicate, remove, and reorder companions; the selected one's items, placement, style, and details | `companionSize`, `companionStyle`, `companionPresence`, `addCompanion(...)` |
+| Effects | rim style, scroll edge fade edges and length, the chrome's shadow | `rimGlow`, `scrollEdgeFade`, the theme's `shadow.chrome` |
+| Behavior | hover keeps visible, hover haptics, glass shading | `chromeBehavior.hoverBehavior`, `chromeBehavior.glassShading` |
+| Activities | starts, alerts, and ends three sample live activities, to see the pill shared and the peek; the song's cover is a shared element; not part of a preset | the module's `NookLiveActivities`, `nookSharedElement(_:style:)` |
+| Widgets | shows sample widgets on a grid in the nook's home, with the columns, sizes, and card style you pick; not part of a preset | `NookWidget`, `NookWidgetGrid` |
+| Tokens | any theme token by id: colors, numbers, fonts, animations, content transitions, sounds, shadows | `NookConfiguration.chromeTheme` tokens |
+
+Some controls exist only to show a setting off. **Preview** on the Top Bar page posts
+a status banner, and on the Type and Motion page switches between home and Settings.
+The Effects page lights the rim and fills the nook with a list and a row of chips that
+scroll. **Header beside notch** on the Top Bar page moves the nook's own header into the
+band beside the notch with `nookNotchAccessories(leading:trailing:)`; with the top bar
+off, it shows what [clearing the notch](/guides/layout-and-insets/#clearing-the-notch)
+does. The theme colors start as **Live** - the palette the chrome resolves from the
+user's preferences - until you pick a color.
+
+The **Theme File** card on the Theme page holds what a theme says beyond its look. Its
+pins replace the person's palette, material, or backdrop strength while the theme is
+on, so a pinned value wins over the Appearance page, as it would in any host.
+
+### The Tokens page
+
+Every value a [chrome theme](/guides/theming/) can set has a stable dotted id, such
+as `banner.cornerRadius` or `motion.content.enter`. The **Tokens** page, under
+Advanced, lists them all, grouped by the first part of the id, and the list comes from
+the framework itself (`NookTokenDescriptor.all`), so a token the framework adds shows
+up with no change to the playground.
+
+- **Search** filters by id; **Changed only** shows the tokens you have overridden.
+- Each row shows what the token resolves to now - with the theme's knobs applied and
+  any reference followed - and a dot and a reset arrow when it is overridden.
+- Opening a row shows an editor for its kind: a color as one color, a pair for dark
+  and light chrome, the accent at an opacity, or another color token; a number as a
+  value or another number token times a factor; a font's role, size, weight, design,
+  width, family, and digits; a spring, a named spring, a timing curve, a Bezier curve,
+  or another animation; a transition's opacity, blur, scale, anchor, offset, and
+  curve; a system, bundled, or file sound and its volume, with a button to hear it;
+  and a shadow's color, radius, and offset.
+
+An override is stored as a token override in the theme, so it reaches the nook, the
+Swift export, the preset, and the theme file exactly as the Theme page's values do.
+A color one of the Theme page's roles sets is the same value on both pages. Where a
+hand-built page sets the same thing - the Panel page's metrics and shape, or the
+fonts and springs on Type and Motion - that page's value wins while it is changed
+there, as `NookConfiguration` documents for `metrics`, `typography`, `motion`, and
+`style`, and the token's row says so.
+
+### Composing companions
+
+A companion holds a list of items, each one of:
+
+- a **button** - an SF Symbol, a name, a glyph color, a fill (none, subtle, a color,
+  or the nook's material) with an optional fade, a size, and an action (post a
+  status, toggle the rim glow, keep open, Settings, or collapse);
+- a **label** - an SF Symbol and some text;
+- the nook's own **lock** or **gear**.
+
+A group of controls is one companion with several items, laid out in a row or a
+column; a control that stands apart is a companion of its own. **Add** starts a
+companion from a template - an action pill, a round button, the nook controls, a
+status chip, or nothing - and its Content tab adds, reorders, and edits the items.
+The **Every Companion** card sets the size, entrance, fade, edge, shadow, and hover
+every companion shares, and each companion's Style tab can set its own, with
+**Default** following the card. A button sized **Surface** is as tall as the
+companion and draws its own surface, so a companion holding only those draws none
+around them and takes the `.plain` style.
+
+## How a change reaches the nook
+
+The playground is a `NookModule` whose `makeConfiguration()` builds a
+`NookConfiguration` from its current settings. After each change it calls
+`reloadActiveConfiguration()` on the coordinator, which builds the configuration
+again and applies it to the running chrome. A slider drag changes the settings
+many times a second, so the playground applies them once per main-actor turn,
+inside `withAnimation`.
+
+Two things take a different path, as they would in any app. The appearance
+preferences belong to the user, so the playground writes them to `AppState` with
+`replaceAppearancePreferences(_:)`, as the built-in Settings screen does. Hover
+behavior belongs to the whole host rather than to a module, so it goes through
+`replaceChromeBehavior(_:)`. Nothing needs a relaunch.
+
+### Doing the same in your app
+
+Any module whose configuration depends on state that changes at runtime - its own
+preferences, a feature flag, a live preview - can use the same seam. Build the
+configuration from that state in `makeConfiguration()`, keep the coordinator from
+`onReady`, and reload when the state changes:
+
+```swift
+@MainActor
+final class DashboardModule: NookModule {
+    nonisolated static let moduleDescriptor = NookModuleDescriptor(
+        id: "com.example.dashboard",
+        displayName: "Dashboard"
+    )
+
+    let descriptor = DashboardModule.moduleDescriptor
+    private let preferences = DashboardPreferences()   // your own state
+    private weak var coordinator: AppCoordinator?
+
+    func makeConfiguration() -> NookConfiguration {
+        var configuration = NookConfiguration()
+        configuration.setHome { DashboardHome() }
+        configuration.expandedWidth = preferences.isWide ? 640 : nil
+        if preferences.showsTimer {
+            configuration.addCompanion(id: "timer", visibility: .both, shape: .circle) { TimerButton() }
+        }
+        configuration.onReady = { [weak self] coordinator in
+            self?.coordinator = coordinator
+        }
+        return configuration
+    }
+
+    func setShowsTimer(_ showsTimer: Bool) {
+        preferences.showsTimer = showsTimer
+        withAnimation(.snappy) { coordinator?.reloadActiveConfiguration() }
+    }
+}
+```
+
+A reload applies everything a module switch applies - the home and compact
+content, theme, top bar, labels, metrics, motion, typography, width, lifecycle
+hooks, file-drop handler, companions, rim glow, and scroll edge fade - and leaves
+Settings when the new configuration turns Settings off. It also applies `style`
+and `transitions`, which the chrome otherwise reads only at launch. It does not
+call `onActivate()` or `onReady` again, and it leaves the nook in whatever state it
+was in.
+
+A few things stay as they are:
+
+- The process-wide values a single-module configuration carries -
+  `preferenceDefaults`, `chromeBehavior`, `branding`, and `showsMenuBarExtra` - are
+  read once at launch. Use `replaceChromeBehavior(_:)` to change chrome behavior.
+- `NookApp.main(configuration)` wraps one fixed configuration, so a reload hands
+  the same value back. Register a module, or a configuration closure with
+  `host.register(_:configuration:)`, to build a new one each time.
+
+At the `NookSurface` level, `Nook.style` and `Nook.hoverBehavior` are settable, so a
+host driving a `Nook` directly can restyle it in place too.
+
+## Exporting Swift
+
+The Swift export targets the single-module `NookConfiguration` path and sets only
+the values that differ from the framework's defaults, so an untouched playground
+exports an empty configuration. Copy it from the code card, or from the Presets page:
+
+```swift
+import NookApp
+import SwiftUI
+
+var configuration = NookConfiguration()
+configuration.setHome { MyHomeView() }  // your home view
+
+configuration.expandedWidth = 420
+configuration.style = NookConfiguration.defaultStyle
+configuration.style?.bottomCornerRadius = 30
+
+configuration.topBar.showsKeepOpenButton = false
+configuration.topBar.showsSettingsButton = false
+
+// How every companion looks and appears, unless it says otherwise.
+configuration.companionStyle = .faded
+
+configuration.addCompanion(id: "controls", anchor: .trailing, hidesInSettings: false) {
+    ControlsCompanion()
+}
+
+NookApp.main(configuration)
+
+// MARK: - Companion content
+
+struct ControlsCompanion: View {
+    var body: some View {
+        VStack(spacing: 2) {
+            NookKeepOpenButton()
+            NookSettingsButton()
+        }
+    }
+}
+```
+
+- Each companion's items are written out as a view of its own, named after the
+  companion: glyph buttons with `.nookGlyph`, labels, and the framework's lock and
+  gear. A button's action is a comment to replace with yours, except the ones the
+  framework runs - keep open, Settings, and collapse - which call
+  `NookChromeActions`. A companion with no items is hidden in the playground, so it is
+  left out, with a comment saying so.
+- The home view appears as a placeholder - `MyHomeView`, and with a header beside
+  the notch `HeaderTitle` and `HeaderButtons` - for you to replace with yours.
+- With **Header beside notch** on, the home view is wrapped in a small view type that
+  applies `nookNotchAccessories(leading:trailing:)`, since `setHome(_:)` takes a
+  `Sendable` view.
+- Changed appearance preferences become `preferenceDefaults`, a launch seed: they
+  set the first run, and a choice the user later makes in Settings wins. Keep Open is
+  left out, since the playground uses it only to hold the nook open.
+- A changed shape starts from `NookConfiguration.defaultStyle`, so only the values
+  you moved appear.
+- A changed rim glow style comes with a reminder that the rim only shows while some
+  content lights it with `nookRimGlow(_:)`.
+- The theme becomes a `NookTheme` with its knobs as initializer arguments, then one
+  line per color, token override, and backdrop:
+
+  ```swift
+  var theme = NookTheme(fontDesign: .rounded, motion: .calm)
+  theme.accent = "#FF8000"
+  theme.tokens[NookDimensionID("banner.cornerRadius")] = 12
+  theme.tokens[NookShadowID("shadow.chrome")] = NookShadowSpec(radius: 10, y: 4)
+  theme.backdrops.liquidGlass = .liquidGlass(.init(tint: .accent, variant: .clear))
+  configuration.chromeTheme = theme
+  ```
+
+In a multi-module host, the configuration lines go in a module's
+`makeConfiguration()`, and `preferenceDefaults` and `chromeBehavior` go on
+`NookHostConfiguration` instead.
+
+## JSON presets
+
+A preset is the playground's settings plus the appearance preferences they were
+tuned against. The Presets page copies, pastes, saves, and opens them, and offers a
+few built-in starting points; applying one can be undone. The playground writes every
+key, sorted, so presets diff cleanly under version control, and writes colors as
+`#RRGGBB` or `#RRGGBBAA`. A preset written by hand can be much shorter:
+
+```json
+{
+  "appearance" : {
+    "chromePalette" : "dark",
+    "presentation" : "floating",
+    "surfaceStyle" : "liquidGlass"
+  },
+  "format" : "opennook.playground-preset",
+  "settings" : {
+    "companionDefaults" : { "fade" : 0.35, "hover" : "lift" },
+    "companions" : [
+      {
+        "alignment" : "end",
+        "id" : "status",
+        "items" : [ { "symbol" : "sparkles", "title" : "3 new", "type" : "label" } ]
+      },
+      {
+        "gap" : 16,
+        "id" : "leave",
+        "items" : [
+          { "action" : "collapse", "fill" : "color", "fillColor" : "#FF3B30",
+            "size" : "surface", "symbol" : "phone.down.fill", "tint" : "#FFFFFF",
+            "title" : "Leave", "type" : "button" }
+        ],
+        "backdrop" : "none",
+        "outline" : "circle"
+      }
+    ],
+    "panel" : { "expandedWidth" : 440 },
+    "theme" : { "accent" : "#FA5C85", "fontDesign" : "rounded" }
+  },
+  "version" : 1
+}
+```
+
+Presets are read leniently:
+
+- A missing key takes its default, so a hand-written preset can hold only the
+  values it cares about, and a preset from an earlier playground still opens.
+- An unknown key is ignored.
+- A value of the wrong type, or a choice the playground does not know, is an
+  error that names the JSON path of the value - for example
+  `settings.panel.expandedWidth should be a number`.
+- A preset whose `version` is newer than the playground reads is refused rather
+  than misread.
+- Companion ids are made unique and non-empty, and negative lengths become zero,
+  since `addCompanion` traps on a duplicate id. Fades are kept between 0 and 1, and a
+  companion keeps at most twelve items.
+- A companion from an earlier playground names its content with `kind` (`actions`,
+  `button`, `controls`, or `chip`) rather than listing `items`, and opens with the
+  items that kind stood for. The playground writes `items` from then on.
+
+Keep Open is never part of a preset, and neither are the demo switches - the lit
+rim, the scrolling demo, the banner message - which the playground remembers
+separately.
+
+Token overrides sit under `settings.theme.tokens`, one member per id in the form a
+theme file writes it, and theme backdrops under `settings.theme.backdrops`. A key the
+playground added after a preset was written is left out until you change it, so
+every older preset still opens and writes back with the keys it had:
+
+```json
+"theme" : {
+  "fontDesign" : "rounded",
+  "tokens" : {
+    "banner.cornerRadius" : 12,
+    "color.label.tertiary" : { "dark" : { "white" : 0.5 }, "light" : "accent" },
+    "motion.statusBanner" : "{spring.snappy}",
+    "shadow.chrome" : { "radius" : 10, "y" : 4 }
+  }
+}
+```
+
+A token id the framework does not define is skipped, and a value of the wrong kind
+for its token is an error that names it, such as
+`settings.theme.tokens.space.md: expected a number or a token such as "{space.md}"`.
+
+## Theme files
+
+**Theme** under Share on the Presets page copies the theme alone - the Theme page,
+the token overrides, and the chrome's shadow - as a framework theme file
+(`{"format": "opennook.theme", "version": 1, ...}`), which any host loads with
+`NookTheme(contentsOf:)` or follows live with `NookThemeSource.watching(fileAt:)`. It
+lists only what differs from `NookTheme.standard`: semantic tokens under `tokens`, the
+chrome's own fields under `components`. The appearance preferences, companions, top
+bar, and the other pages are not part of a theme, so they stay in the preset and the
+Swift export.
+
+## The assistant
+
+The assistant proposes changes to the same settings the pages edit, including token
+overrides by id under `settings.theme.tokens` and theme backdrops. Its schema lists
+every token id from the framework's registry, and an id the registry does not define
+is sent back to the model to correct rather than dropped. Each token it changes is a
+row of its own under **Tokens** in the proposal, which you can switch off before
+applying.
+
+Under `swift run` the playground is an unbundled, unsandboxed binary, so the save
+and open panels cannot enter the folders macOS protects (Desktop, Documents,
+Downloads). Use another folder, or copy and paste the JSON.
+
+## Where the playground keeps its state
+
+- The settings and demo switches live in the module's own defaults suite,
+  `context.defaults` (`opennook.module.com.opennook.example.playground`), like any
+  module's state.
+- The appearance preferences live where the framework keeps them for any host.
+- The window's own choices, such as which folded rows are open and whether the code
+  shows, live in the app's standard defaults.
+- **Reset** beside Everything on the Presets page returns the settings and the
+  appearance to the defaults.
+
+## How the example is built
+
+The playground is bigger than the other examples, so it spans several files:
+
+- `Examples/PlaygroundNook/Core` - the `PlaygroundNookCore` target: the settings
+  model (`PlaygroundSettings`), presets and their JSON coder (`PlaygroundPreset`,
+  `PlaygroundPresetCoder`), the Swift exporter (`PlaygroundSwiftExporter`), and
+  the store. The exporters are pure, and `Tests/PlaygroundNookTests` covers them,
+  including a check that every default still matches the framework's.
+- `Examples/PlaygroundNook/App` - the module, the model that applies changes, the
+  controls window, and the views shown in the nook.
+
+## See also
+
+- [Chrome customization](/guides/chrome-customization/) - the configuration seams
+  the playground drives.
+- [Companion surfaces](/guides/companion-surfaces/) and
+  [Rim glow and edge fade](/guides/panel-effects/) - the features behind the
+  Companions and Effects pages.
+- [Layout and content insets](/guides/layout-and-insets/#clearing-the-notch) - notch
+  clearance and views beside the notch, behind the Top Bar page's Notch card.
+- [Multiple modules](/guides/multiple-modules/) - modules, contexts, and the switch
+  lifecycle a reload borrows from.

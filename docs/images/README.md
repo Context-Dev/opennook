@@ -1,46 +1,212 @@
-# OpenNook screenshots
+# OpenNook README media
 
-macOS app screenshots for the root `README.md`. Drop PNGs here with the
-filenames below. Crop tightly to the opaque nook chrome only - no desktop
-or browser background.
+Images and the animated hero for the root `README.md`.
 
-## Run the demo
+| File | What it shows | Produced by |
+| --- | --- | --- |
+| `nook-hero.gif` | Five ShowcaseNook scenes, each opening from the collapsed pill: player, agenda, shelf, timer, progress | `make-readme-media.sh` |
+| `nook-player.png` | `ShowcaseNook --scene player`, expanded | `make-readme-media.sh` |
+| `nook-agenda.png` | `ShowcaseNook --scene agenda`, expanded | `make-readme-media.sh` |
+| `nook-timer.png` | `ShowcaseNook --scene timer`, expanded | `make-readme-media.sh` |
+| `nook-progress.png` | `ShowcaseNook --scene progress`, expanded | `make-readme-media.sh` |
+| `nook-shelf.png` | `ShowcaseNook --scene shelf`, expanded | `make-readme-media.sh` |
+| `nook-playground.gif` | The PlaygroundNook controls window below the expanded nook, while Material moves Solid -> Translucent -> Glass and the nook follows | `record-playground.sh` |
+| `nook-activities.gif` | `ShowcaseNook --scene compact`: two live activities in the pill, the song's peek, the nook opened onto the song | `record-activities.sh` |
+| `nook-shared.gif` | `ShowcaseNook --scene compact --open-activity`: the song's cover moving from the pill into the player as the nook opens | `record-widgets.sh` |
+| `nook-themes.gif` | `ShowcaseNook --scene agenda`, re-themed live: the standard look, then Dusk, Aurora and Ember from `Examples/Themes` | `record-themes.sh` |
 
-From the repo root (after `swift build` once):
+`record-playground.sh` also writes `nook-playground.png`, a still of the same
+pair, which `README.md` does not use. `record-widgets.sh` also writes
+`site/src/assets/widgets/nook-board.png`, `ShowcaseNook --scene board`, for the
+Widgets and boards guide. It records the cover's move slowed and plays it back at
+real speed; its header says how. `record-themes.sh` also writes
+`site/src/assets/themes/nook-themes.png` for the Theming guide.
+
+## Regenerate
+
+The generated files come from the same ShowcaseNook recordings as the landing
+page, so one recording session feeds both the site and the README:
 
 ```sh
-swift run Nook          # default demo - expanded home view
+./Scripts/record-showcase.sh player agenda timer progress   # re-record the scenes (optional)
+./Scripts/build-landing-reel.sh                             # cut the landing reel from them
+./docs/images/make-readme-media.sh                          # rebuild the five files above
+```
+
+`make-readme-media.sh` only reads its inputs. It needs `ffmpeg` and takes a
+few seconds.
+
+### What the script does
+
+Its inputs already carry alpha: `record-showcase.sh` keys the cream recording
+backdrop out and unmixes the rim glow from it (`Scripts/unmix-backdrop.swift`),
+and `build-landing-reel.sh` cuts the scenes into one 1440x672 reel with the
+notch on the first row and a seamless loop.
+
+1. **Backdrop.** Everything is composited onto a cool paper, `#EAF1F8`. The
+   black nook needs a light surface around it so its outline shows on GitHub's
+   dark theme, and the paper reads as a soft card on the light one too.
+
+2. **Hero GIF.** The whole reel (`site/src/assets/reel/reel-alpha.webm`, about
+   16 s) on paper at 12 fps, scaled to 840x392 with lanczos. The reel ends on
+   the frame it starts with, so the GIF loops without a seam. One global
+   256-colour `palettegen` pass, applied with
+   `paletteuse=dither=sierra2_4a:diff_mode=rectangle`, keeps it under 3 MB.
+
+3. **Stills.** Each window capture in `site/src/assets/showcase/<scene>.png`
+   is centred on a 1440x672 paper canvas (the reel's frame) with the notch on
+   the top edge, so the four stills line up in the README grid, then halved to
+   720x336.
+
+`hud` and `compact` are small enough that they read poorly at README size, so
+they are left out.
+
+## PlaygroundNook
+
+The playground is the live-tweaking tool, so its media has to show the controls
+window and the running nook together - a still of the nook alone says nothing
+about it. It is captured live rather than cut from the reel, so it has its own
+script:
+
+```sh
+./docs/images/record-playground.sh --dry-run   # print the steps
+./docs/images/record-playground.sh             # still + clip
+./docs/images/record-playground.sh still       # just the still
+./docs/images/record-playground.sh clip --seconds 9 --fps 6
+./docs/images/record-playground.sh clip --no-drive    # change the control by hand
+```
+
+The script hides the desk behind `playground-backdrop.swift` (the README paper,
+`#EAF1F8`, one window level *below* normal windows so the controls window stays
+in front - `Scripts/reel-backdrop.swift` sits above them and would cover it),
+opens `PlaygroundNook --sample glass --expand --keep-open`, and captures the
+nook panel and the controls window by window id. Nothing is keyed: the backdrop
+is already the final colour.
+
+**Only the app's own two windows are ever captured.** Both the still and the
+clip are `screencapture -x -o -l<id>` of windows the launched PlaygroundNook
+owns; no rectangle of the screen is recorded, and the script does not so much as
+compute one. The paper behind the pair is painted by ffmpeg rather than
+photographed, so `playground-backdrop.swift` is only there to let the operator
+see the shot they are composing. Nothing on the desk, in front of the backdrop
+or behind it, can reach either file.
+
+- **Still.** The panel capture is trimmed of its transparent margin, then the
+  pair is composited onto one paper canvas: the nook flush with the top edge
+  (the notch on the first row, as the ShowcaseNook stills sit) and the controls
+  window centred below, scaled to 840 wide.
+
+- **Clip.** `screencapture -v` takes a rectangle and no window id, so the clip
+  is not a movie: it is a burst of window-id captures. For `--seconds`, the loop
+  grabs both windows in parallel as fast as macOS manages, about 5 pairs a
+  second here, re-resolving both ids whenever a capture comes back empty (the
+  panel's id changes when the nook expands or its window is rebuilt) and
+  carrying the previous frame's half over so the take neither dies nor freezes.
+  Each pair is then composited exactly as the still is, onto one canvas sized
+  from the largest panel in the take, and the pairs are resampled onto an even
+  `--fps` grid using the time each one landed, so uneven captures still read as
+  even motion. `--fps` defaults to 6 and drops to the rate the loop actually
+  managed. The GIF pass is the hero GIF's recipe: 840 wide, one global
+  256-colour `palettegen`, `paletteuse=dither=sierra2_4a:diff_mode=rectangle`,
+  `-loop 0`.
+
+- **Driving.** The control the clip shows being changed is pressed by the
+  script, not by a person. `playground-poke.swift` builds an accessibility
+  element from the pid the script launched, walks only that app's `AXWindows`,
+  and presses the button it is asked for. The Appearance page's segmented rows
+  carry no accessibility identifiers, so a step names the row and the choice by
+  the labels `PillPicker` already exposes - the row is an `AXGroup` labelled
+  `Material` holding `AXButton`s labelled `Solid`, `Translucent` and `Glass` -
+  and a step matches only when one element carries the row's label *and* has
+  that choice under it, which keeps the row's plain `Text("Material")` out of
+  the way. Steps also take `id=<identifier>` for anything that does expose one
+  (`toolbar.code`, `toolbar.expand`, `assistant.apply`) and `page=<id>` for the
+  sidebar rows (`page.theme`, `page.effects`).
+
+  The default is `Material=Solid,Material=Translucent,Material=Glass`, which
+  ends on the material `--sample glass` starts from, so the GIF loops without a
+  jump. The steps are spread evenly over `--seconds`, leaving a beat of settled
+  frames at either end. `--drive-steps` takes a different list; `--no-drive`
+  leaves the app alone and the clip waits for a person, the way it used to.
+
+  Two things bound what the poker can touch. It is given one pid and nothing
+  else, and every element is checked to belong to that pid before it is
+  pressed; and it never reads the app's `AXMenuBar`, which on a real Mac
+  carries the Apple menu's recent documents. It needs Accessibility permission
+  for whatever runs the script (System Settings -> Privacy & Security ->
+  Accessibility). Without it the script says so and stops before recording
+  anything, rather than producing a take where nothing moves.
+
+With `--no-drive` the clip needs a person: when the countdown ends, change one
+visible control (Appearance -> Material, or Theme -> Accent) slowly enough to
+read, and let the nook settle. Keep the pointer over the controls window, which
+is the only place the capture can see it.
+
+## Themes
+
+`nook-themes.gif` shows one running nook taking each theme file in turn, so it
+is captured live too:
+
+```sh
+./docs/images/record-themes.sh --dry-run   # print the steps
+./docs/images/record-themes.sh             # the GIF and the guide's grid
+```
+
+The script launches `ShowcaseNook --scene agenda --keep-open --theme <file>`
+with a scratch theme file, then copies the standard theme and each file in
+`Examples/Themes` over it. ShowcaseNook watches that file
+(`NookThemeSource.watching(fileAt:)`), so each frame is the same process
+re-themed on save, not a relaunch. The reload has no transition, and the GIF
+does not invent one: it cuts from theme to theme, holding each for 2.2 s.
+
+- **Captures.** One `screencapture -x -o -l<id>` of the nook panel per theme,
+  the app's layer-33 window, found by pid with `Scripts/nook-windows.swift`. No
+  rectangle of the screen is recorded.
+- **Crop.** All four captures are cropped to one rectangle, the union of their
+  non-transparent pixels, so the nook stays put from frame to frame and no
+  shadow is cut off in a straight line.
+- **Paper.** Each capture is laid on opaque `#EAF1F8` paper, flush with the
+  top edge, with a 72 px margin at the sides and bottom.
+- **GIF.** The hero GIF's recipe: 840 wide, one global 256-colour
+  `palettegen`, `paletteuse=dither=sierra2_4a:diff_mode=rectangle`, `-loop 0`.
+- **Grid.** The same four frames two by two, at full resolution, written to
+  `site/src/assets/themes/nook-themes.png`; the site scales it.
+
+ShowcaseNook's defaults domains are exported before the launch and imported
+again afterwards, or deleted if they did not exist, so a run leaves no setting
+behind.
+
+## Live activities
+
+`nook-activities.gif` shows the open sequence on real captures:
+
+```sh
+./docs/images/record-activities.sh --dry-run   # print the steps
+./docs/images/record-activities.sh             # the GIF and the guide's still
+```
+
+Each state is its own launch of `ShowcaseNook --scene compact`: plain (the song holds
+the pill, the focus session waits in a capsule), `--peek` (the song's peek alert, held),
+and `--open-activity` (the nook opened onto the song, held). Each is one
+`screencapture -x -o -l<id>` of the nook panel, the app's layer-33 window found by pid;
+no rectangle of the screen is recorded. The three are cropped to one rectangle, so
+the pill and the peek sit under the notch where they do on screen, laid on the same
+`#EAF1F8` paper as the theme GIF, and cut together with no invented transition.
+The Live activities guide gets the pill and the peek side by side
+(`site/src/assets/activities/nook-activities.png`). ShowcaseNook's defaults domains
+are saved and restored around the run, as in `record-themes.sh`.
+
+## Manual captures
+
+For a still the script does not cover, run the example from the repo root
+(after `swift build` once), expand with **⌥⌘;**, and capture:
+
+```sh
 swift run ShelfNook     # file shelf (NookComponents)
 ```
 
-Expand with **⌥ Space** (Option + Space), or hover the menu-bar
-pill on the display where the nook appears.
-
-Quit with **⌘Q** on the Nook process, or from the menu-bar item.
-
-## Multi-display setup
-
-OpenNook defaults to the **built-in (notched) display**. On a dual-monitor
-setup the nook is on the laptop panel, not necessarily the screen you are
-looking at.
-
-For capture:
-
-1. Glance at the built-in display (or mirror displays in System Settings).
-2. Or open Settings -> Display in the nook and pick your external monitor
-   or **Main display** for the session, then switch back when done.
-
-Use a solid gray wallpaper and hide other windows (**Cmd+Option+H**) if
-you want a clean backdrop behind the pill.
-
-## Files to add
-
-| Filename | What to capture |
-| --- | --- |
-| `nook-expanded.png` | Expanded demo home (`swift run Nook`) |
-| `nook-shelf.png` | Shelf empty state (`swift run ShelfNook`) |
-
-**Capture tip:** **Cmd+Shift+4**, then **Space**, click the nook window.
-Or drag a tight region around the black pill only.
-
-Recommended width: ~540 px (1x). PNG, no alpha required.
+OpenNook defaults to the built-in (notched) display. On a multi-display setup,
+capture from the laptop panel, or pick another display in Settings -> Display
+for the session. **Cmd+Shift+4**, then **Space**, then click the nook window
+captures it on its own. Crop tightly to the nook and keep the width near the
+existing stills (about 720px).

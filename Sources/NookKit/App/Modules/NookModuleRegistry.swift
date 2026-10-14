@@ -46,11 +46,23 @@ public final class NookModuleRegistry {
     /// appearance->backdrop mapping). Held here for the same reason as ``branding`` - so
     /// ``ModuleHost`` and ``AppCoordinator`` can read it without a reference back to the
     /// host configuration. See ``NookChromeBehavior``.
+    ///
+    /// This is the behavior the host launched with. Read the live value from
+    /// ``ModuleHost/chromeBehavior``, which ``AppCoordinator/replaceChromeBehavior(_:)``
+    /// updates.
     public let chromeBehavior: NookChromeBehavior
 
     /// Whether the framework installs its menu-bar status item. Held here so the app
     /// shell can read it (and observe it) through ``ModuleHost``.
     public let showsMenuBarExtra: Bool
+
+    /// The host's chrome theme, for every module whose configuration sets none. See
+    /// ``NookHostConfiguration/chromeTheme``.
+    public let chromeTheme: NookTheme?
+
+    /// The host's live chrome theme, which stands in for ``chromeTheme`` when set. See
+    /// ``NookHostConfiguration/chromeThemeSource``.
+    public let chromeThemeSource: NookThemeSource?
 
     /// Where the module switcher appears (menu bar, leading cluster, or nowhere). Held
     /// here so the router and the app shell can read it through ``ModuleHost``. See
@@ -69,6 +81,19 @@ public final class NookModuleRegistry {
     /// ``NookModuleContext`` is built. See ``NookFilePicker``.
     public let filePicker: NookFilePicker
 
+    /// The host's live activities, shared across every module. Each module's ``AppServices``
+    /// gets its own view of it (``NookLiveActivitiesKey``), and a module's activities end when
+    /// it is unloaded. See ``NookActivityCenter``.
+    public let liveActivities = NookActivityCenter()
+
+    /// The widgets every loaded module offers, for boards. A module's widgets leave with it
+    /// when it is unloaded. See ``NookWidgetCatalog``.
+    let widgets: NookWidgetCatalog
+
+    /// How the compact pill shares itself among live activities. See
+    /// ``NookHostConfiguration/activityPolicy``.
+    public let activityPolicy: NookActivityPolicy
+
     private var instances: [String: NookModule] = [:]
     private var contexts: [String: NookModuleContext] = [:]
 
@@ -79,8 +104,11 @@ public final class NookModuleRegistry {
         branding: NookHostBranding = .default,
         chromeBehavior: NookChromeBehavior = .default,
         showsMenuBarExtra: Bool = true,
+        chromeTheme: NookTheme? = nil,
+        chromeThemeSource: NookThemeSource? = nil,
         switcherPlacement: NookModuleSwitcherPlacement = .menuBar,
-        presentationPinning: NookPresentationPinning = NookPresentationPinning()
+        presentationPinning: NookPresentationPinning = NookPresentationPinning(),
+        activityPolicy: NookActivityPolicy = .standard
     ) {
         self.registrations = registrations
         self.defaultModuleID = defaultModuleID
@@ -88,9 +116,13 @@ public final class NookModuleRegistry {
         self.branding = branding
         self.chromeBehavior = chromeBehavior
         self.showsMenuBarExtra = showsMenuBarExtra
+        self.chromeTheme = chromeTheme
+        self.chromeThemeSource = chromeThemeSource
         self.switcherPlacement = switcherPlacement
         self.presentationPinning = presentationPinning
+        self.activityPolicy = activityPolicy
         self.filePicker = NookFilePicker(presentationPinning: presentationPinning)
+        self.widgets = NookWidgetCatalog(moduleOrder: registrations.map(\.descriptor.id))
     }
 
     /// All registered modules' descriptors, in registration order - the switcher's list.
@@ -113,7 +145,9 @@ public final class NookModuleRegistry {
         let context = NookModuleContext.makeDefault(
             for: registration.descriptor,
             presentationPinning: presentationPinning,
-            filePicker: filePicker
+            filePicker: filePicker,
+            liveActivities: liveActivities,
+            widgets: widgets
         )
         let module = registration.factory(context)
         contexts[id] = context
@@ -138,5 +172,8 @@ public final class NookModuleRegistry {
     public func unload(_ id: String) {
         instances.removeValue(forKey: id)
         contexts.removeValue(forKey: id)
+        // Its activities' views read the instance's state, which is gone.
+        liveActivities.endAll(moduleID: id)
+        widgets.remove(moduleID: id)
     }
 }

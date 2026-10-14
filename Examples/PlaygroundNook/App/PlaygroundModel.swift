@@ -1,0 +1,419 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Glendon Chin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// A copy is included at /LICENSE in the repository root.
+
+import AppKit
+import NookApp
+import PlaygroundNookCore
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// The playground's state and the one place that applies it to the running nook.
+@MainActor
+final class PlaygroundModel: ObservableObject {
+    /// Everything the controls edit except the appearance preferences, which live in
+    /// `AppState`. Every change is saved and applied to the chrome on the next main-actor turn.
+    @Published var settings: PlaygroundSettings {
+        didSet {
+            guard settings != oldValue else { return }
+            if settings.behavior != oldValue.behavior {
+                coordinator?.replaceChromeBehavior(settings.chromeBehavior)
+            }
+            scheduleApply()
+        }
+    }
+
+    /// Demo-only state: the rim demo, the scrolling list, the banner message.
+    @Published var demo: PlaygroundDemo {
+        didSet {
+            guard demo != oldValue else { return }
+            store.saveDemo(demo)
+        }
+    }
+
+    /// The widget grid the Widgets page shows in the nook's home, or `nil` for the home's own
+    /// sample content. A live demo, never saved.
+    @Published var widgetDemo: PlaygroundWidgetDemo?
+
+    /// A message for the controls window to show in an alert, such as why a preset did not open.
+    @Published var alertMessage: String?
+
+    /// Whether the assistant has a request in flight. The nook lights its own rim while it does, so
+    /// the thing being edited is what says work is happening. Not persisted: it is about this moment,
+    /// not about the look.
+    @Published var assistantIsBusy = false
+
+    /// A short confirmation at the bottom of the controls window, such as "Copied".
+    @Published private(set) var toast: Toast?
+
+    struct Toast: Equatable {
+        let message: String
+        /// Whether ``undo()`` can take back what the message reports.
+        let canUndo: Bool
+    }
+
+    /// Weak because the coordinator owns this model, through the module host.
+    private(set) weak var coordinator: AppCoordinator?
+
+    /// The assistant's state. Created with the model rather than with the window, so a request keeps
+    /// running when the controls window is closed.
+    private(set) lazy var assistant = AssistantModel(store: store, playground: self)
+
+    private let store: PlaygroundStore
+    private var isApplyScheduled = false
+    private var toastTask: Task<Void, Never>?
+    /// What the last undoable change replaced.
+    private var undoPreset: PlaygroundPreset?
+    private var controlsWindow: PlaygroundControlsWindowController?
+
+    init(store: PlaygroundStore) {
+        self.store = store
+        settings = store.loadSettings()
+        demo = store.loadDemo()
+    }
+
+    /// Called from `onReady`, once the chrome is running.
+    func attach(to coordinator: AppCoordinator) {
+        self.coordinator = coordinator
+        // The configuration was built from the saved settings at launch; the chrome behavior
+        // is host-wide, so it is applied separately.
+        coordinator.replaceChromeBehavior(settings.chromeBehavior)
+        if !LaunchOptions.hidesControls {
+            showControls(activating: false)
+        }
+        if let sampleID = LaunchOptions.sampleID {
+            if let sample = PlaygroundPreset.samples.first(where: { $0.id == sampleID }) {
+                apply(sample.preset)
+            }
+        }
+        if let path = LaunchOptions.presetPath {
+            importPreset(from: URL(fileURLWithPath: path))
+        }
+        if LaunchOptions.keepsNookOpen || LaunchOptions.expandsNook {
+            // The sample/preset apply reloads configuration on the next main-actor
+            // turn. Open after that so the expanded chrome is the look we just set.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self else { return }
+                // Keep-open only stops the nook collapsing on its own: it does not open
+                // one that is closed, so a launch that asks for it still has to show the
+                // nook, or the app sits on the pill with the preference set.
+                if LaunchOptions.keepsNookOpen {
+                    self.setKeepsNookExpanded(true)
+                }
+                self.coordinator?.showNook()
+            }
+        }
+    }
+
+    /// `--preset <path>` opens a JSON preset, `--sample <id>` opens a built-in sample
+    /// (`defaults`, `media`, `glass`, `glance`, `call`), `--expand` opens the nook,
+    /// `--keep-open` holds it expanded, and `--hide-controls` skips the controls window.
+    private enum LaunchOptions {
+        static var presetPath: String? {
+            let arguments = ProcessInfo.processInfo.arguments
+            guard let index = arguments.firstIndex(of: "--preset"), arguments.indices.contains(index + 1) else {
+                return nil
+            }
+            return arguments[index + 1]
+        }
+
+        static var sampleID: String? {
+            let arguments = ProcessInfo.processInfo.arguments
+            guard let index = arguments.firstIndex(of: "--sample"), arguments.indices.contains(index + 1) else {
+                return nil
+            }
+            return arguments[index + 1]
+        }
+
+        static var expandsNook: Bool {
+            ProcessInfo.processInfo.arguments.contains("--expand")
+        }
+
+        static var keepsNookOpen: Bool {
+            ProcessInfo.processInfo.arguments.contains("--keep-open")
+        }
+
+        static var hidesControls: Bool {
+            ProcessInfo.processInfo.arguments.contains("--hide-controls")
+        }
+    }
+
+    // MARK: - Applying
+
+    /// A slider drag changes the settings many times a second. Saving and applying once per
+    /// main-actor turn keeps the chrome and the controls responsive.
+    private func scheduleApply() {
+        guard !isApplyScheduled else { return }
+        isApplyScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isApplyScheduled = false
+            self.store.saveSettings(self.settings)
+            withAnimation(.snappy(duration: 0.3)) {
+                self.coordinator?.reloadActiveConfiguration()
+            }
+        }
+    }
+
+    // MARK: - Appearance
+
+    var appearance: NookAppearancePreferences {
+        coordinator?.appState.appearancePreferences ?? .default
+    }
+
+    /// Changes the user's appearance preferences the way the built-in Settings screen does: the
+    /// framework persists them and restyles the chrome.
+    func updateAppearance(_ change: (inout NookAppearancePreferences) -> Void) {
+        guard let appState = coordinator?.appState else { return }
+        var preferences = appState.appearancePreferences
+        change(&preferences)
+        appState.replaceAppearancePreferences(preferences)
+    }
+
+    // MARK: - The nook
+
+    func expandNook() {
+        coordinator?.showNook()
+    }
+
+    func collapseNook() {
+        coordinator?.hideNook()
+    }
+
+    /// Opens the nook on Settings, or back on home when Settings is already showing.
+    func toggleNookSettings() {
+        guard let coordinator else { return }
+        if coordinator.appState.isSettingsView {
+            coordinator.showHome()
+        } else {
+            coordinator.showSettings()
+        }
+    }
+
+    func setKeepsNookExpanded(_ keepsExpanded: Bool) {
+        guard let coordinator, coordinator.appState.keepNookOpen != keepsExpanded else { return }
+        coordinator.toggleKeepNookOpen()
+        if keepsExpanded {
+            coordinator.showNook()
+        }
+    }
+
+    /// Posts the demo status banner.
+    func postStatus() {
+        postStatus(demo.statusMessage, severity: NookStatusSeverity(rawValue: demo.statusSeverity) ?? .info)
+    }
+
+    /// `showNook()` clears the transient status as it opens the nook, so the banner is posted
+    /// after asking it to open.
+    func postStatus(_ message: String, severity: NookStatusSeverity) {
+        guard let coordinator else { return }
+        coordinator.showNook()
+        coordinator.appState.showStatus(message, severity: severity)
+    }
+
+    func clearStatus() {
+        coordinator?.appState.resetTransientStatus()
+    }
+
+    // MARK: - Presets
+
+    var preset: PlaygroundPreset {
+        PlaygroundPreset(appearance: appearance, settings: settings)
+    }
+
+    var swiftSnippet: String {
+        PlaygroundSwiftExporter.snippet(for: preset)
+    }
+
+    var presetJSON: String {
+        (try? PlaygroundPresetCoder.encodeString(preset)) ?? ""
+    }
+
+    /// Replaces the settings and the appearance with the preset's. Keep-open is a working aid
+    /// rather than part of a look, so it stays as it is.
+    func apply(_ preset: PlaygroundPreset) {
+        settings = preset.settings.normalized()
+        updateAppearance { preferences in
+            let keepsOpen = preferences.keepNookOpen
+            preferences = preset.appearance
+            preferences.keepNookOpen = keepsOpen
+        }
+    }
+
+    /// Applies a preset and offers to undo it.
+    func apply(_ preset: PlaygroundPreset, announcing message: String) {
+        apply(preset, replacing: self.preset, announcing: message)
+    }
+
+    /// Applies a preset and offers to undo back to `previous` rather than to the state right before
+    /// this call. The assistant needs this: after a preview, what is on screen is already the change,
+    /// and Undo has to reach the settings from before the preview started.
+    func apply(_ preset: PlaygroundPreset, replacing previous: PlaygroundPreset, announcing message: String) {
+        apply(preset)
+        flash(message, undoing: previous)
+    }
+
+    /// Puts back what the last undoable change replaced.
+    func undo() {
+        guard let undoPreset else { return }
+        apply(undoPreset)
+        flash("Undone")
+    }
+
+    func resetEverything() {
+        apply(PlaygroundPreset(), announcing: "Reset everything")
+    }
+
+    /// Returns one page's settings to the defaults, as its sidebar menu offers.
+    func reset(_ page: PlaygroundPage) {
+        let previous = preset
+        var settings = settings
+        switch page {
+            case .appearance:
+                updateAppearance { preferences in
+                    let keepsOpen = preferences.keepNookOpen
+                    preferences = .default
+                    preferences.keepNookOpen = keepsOpen
+                }
+            case .theme:
+                // The tokens are the Tokens page's to reset.
+                var theme = PlaygroundSettings.Theme()
+                theme.tokens = settings.theme.tokens
+                settings.theme = theme
+            case .panel:
+                settings.panel = .init()
+                settings.metrics = .init()
+            case .typeAndMotion:
+                settings.typography = .init()
+                settings.motion = .init()
+            case .topBar:
+                settings.topBar = .init()
+                settings.labels = .init()
+            case .companions:
+                // The lock and gear go back to the top bar with the companion that held them.
+                let previous = settings.companions
+                settings.companions = []
+                settings.restoreChromeControls(heldBy: previous)
+                settings.companionDefaults = .init()
+            case .effects:
+                settings.rimGlow = .init()
+                settings.scrollEdgeFade = .init()
+                settings.theme.tokens[.chrome] = nil
+            case .behavior:
+                settings.behavior = .init()
+            case .tokens:
+                settings.theme.tokens = .init()
+            case .activities, .widgets, .presets:
+                return
+        }
+        self.settings = settings
+        flash("Reset \(page.title)", undoing: previous)
+    }
+
+    func copySwift(announcing: Bool = true) {
+        copy(swiftSnippet)
+        if announcing { flash("Copied the Swift") }
+    }
+
+    func copyJSON(announcing: Bool = true) {
+        copy(presetJSON)
+        if announcing { flash("Copied the preset") }
+    }
+
+    /// Copies the theme part of the settings as a framework theme file, which any host loads
+    /// with `NookTheme(contentsOf:)` or follows with `NookThemeSource.watching(fileAt:)`.
+    func copyThemeJSON() {
+        do {
+            copy(try NookThemeCoder.encodeString(settings.theme.nookTheme))
+            flash("Copied the theme")
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func pasteJSON() {
+        guard let text = NSPasteboard.general.string(forType: .string) else {
+            alertMessage = "The clipboard has no text to read a preset from."
+            return
+        }
+        do {
+            apply(try PlaygroundPresetCoder.decode(text), announcing: "Applied the preset from the clipboard")
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func saveJSON() {
+        guard let window = controlsWindow?.window else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "nook-preset.json"
+        panel.canCreateDirectories = true
+        Task {
+            guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return }
+            do {
+                try PlaygroundPresetCoder.encode(preset).write(to: url, options: .atomic)
+                flash("Saved \(url.lastPathComponent)")
+            } catch {
+                alertMessage = "The preset could not be saved: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func openJSON() {
+        guard let window = controlsWindow?.window else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        Task {
+            guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return }
+            importPreset(from: url)
+        }
+    }
+
+    private func importPreset(from url: URL) {
+        do {
+            let data = try Data(contentsOf: url)
+            apply(try PlaygroundPresetCoder.decode(data), announcing: "Opened \(url.lastPathComponent)")
+        } catch let error as PlaygroundPresetError {
+            alertMessage = "\(url.lastPathComponent): \(error.localizedDescription)"
+        } catch {
+            alertMessage = "\(url.lastPathComponent) could not be read: \(error.localizedDescription)"
+        }
+    }
+
+    private func copy(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// Shows `message` for a moment, longer when it offers to undo.
+    private func flash(_ message: String, undoing previous: PlaygroundPreset? = nil) {
+        toastTask?.cancel()
+        undoPreset = previous
+        toast = Toast(message: message, canUndo: previous != nil)
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(previous == nil ? 2 : 5))
+            guard !Task.isCancelled else { return }
+            self?.toast = nil
+            self?.undoPreset = nil
+        }
+    }
+
+    // MARK: - Controls window
+
+    /// Shows the controls window. At launch it comes up without taking focus from the app in
+    /// front; from the nook's button it activates the playground too.
+    func showControls(activating: Bool) {
+        guard let coordinator else { return }
+        let controller =
+            controlsWindow ?? PlaygroundControlsWindowController(model: self, appState: coordinator.appState)
+        controlsWindow = controller
+        controller.present(activating: activating)
+    }
+}

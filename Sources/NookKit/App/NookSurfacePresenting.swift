@@ -38,7 +38,7 @@ public struct NookSurfaceClaim: Sendable {
     /// arbiter synthetically releases it (logging a warning).
     ///
     /// **Safety net, not flow control.** Default ``defaultMaxDuration`` (30 s) is sized
-    /// so a well-behaved presenter (e.g. ``NookComponents``' `NookActivityQueue`,
+    /// so a well-behaved presenter (e.g. `NookComponents`' `NookActivityQueue`,
     /// whose per-activity dwell is bounded in seconds) never trips it. The watchdog
     /// exists so a presenter that crashes mid-presentation (or never calls
     /// ``NookSurfacePresenting/endTransientPresentation(_:)``) does not accumulate
@@ -49,6 +49,10 @@ public struct NookSurfaceClaim: Sendable {
     /// surface for more than, say, 5 seconds.
     public let maxDuration: Duration?
 
+    /// How the granted claim shows itself: the full nook (the default) or the compact pill's
+    /// peek.
+    public let presentation: NookSurfacePresentation
+
     /// Watchdog default - 30 seconds. Long enough that no well-behaved presenter
     /// hits it, short enough that a stuck claim is cleaned up before the user
     /// notices accumulated denials of their next claim.
@@ -57,12 +61,24 @@ public struct NookSurfaceClaim: Sendable {
     public init(
         moduleID: String,
         priority: NookSurfacePriority = .normal,
-        maxDuration: Duration? = NookSurfaceClaim.defaultMaxDuration
+        maxDuration: Duration? = NookSurfaceClaim.defaultMaxDuration,
+        presentation: NookSurfacePresentation = .expanded
     ) {
         self.moduleID = moduleID
         self.priority = priority
         self.maxDuration = maxDuration
+        self.presentation = presentation
     }
+}
+
+/// How a granted ``NookSurfaceClaim`` shows itself.
+public enum NookSurfacePresentation: Sendable, Equatable {
+    /// Opens the full nook onto the claiming module's content.
+    case expanded
+    /// Grows the compact pill into the claiming module's peek (`NookConfiguration.setPeek`),
+    /// for a glance such as a HUD or a track change. Opens the full nook instead when the
+    /// module has no peek, or leaves it open when it already is.
+    case peek
 }
 
 /// Opaque handle to a granted transient presentation. A presenter holds the token it
@@ -99,7 +115,7 @@ public protocol NookSurfacePresenting: AnyObject {
     ///
     /// **Engagement gates `begin` only.** Engagement that *begins* after a claim has
     /// already been granted does NOT preempt the active claim: the presenter is
-    /// responsible for yielding when the user steps in. ``NookActivityQueue`` does
+    /// responsible for yielding when the user steps in. `NookActivityQueue` does
     /// this by polling ``isUserEngaged`` between dwells; a custom presenter should
     /// observe ``userEngagementChanges`` and `end` its claim when it sees `true`.
     var isUserEngaged: Bool { get }
@@ -122,4 +138,19 @@ public protocol NookSurfacePresenting: AnyObject {
     /// restores to the state captured before the first claim took it - unless the user
     /// has since engaged the surface, in which case their state is left untouched.
     func endTransientPresentation(_ token: NookSurfaceToken) async
+
+    /// Releases a granted claim `delay` from now, as ``endTransientPresentation(_:)`` would.
+    /// Calling it again moves the end, so a HUD that calls it on every change stays up until
+    /// `delay` after the last one. The scheduled end replaces the claim's watchdog. Returns
+    /// `false` when the token is stale, or when the conformer does not schedule ends (the
+    /// default implementation), in which case the presenter ends the claim itself.
+    func endTransientPresentation(_ token: NookSurfaceToken, after delay: Duration) async -> Bool
+}
+
+extension NookSurfacePresenting {
+    /// Schedules nothing and returns `false`, so a conformer written before scheduled ends
+    /// keeps compiling. `AppCoordinator` schedules them.
+    public func endTransientPresentation(_ token: NookSurfaceToken, after delay: Duration) async -> Bool {
+        false
+    }
 }

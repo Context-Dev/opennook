@@ -56,26 +56,107 @@ public struct NookConfiguration: Sendable {
     /// while the accessory has nothing to show.
     public var attachedAccessory: NookAttachedAccessoryConfiguration?
 
-    /// Resolves the chrome palette. Defaults to ``NookResolvedTheme/live(appState:)``;
-    /// supply a closure returning a host-built ``NookResolvedTheme`` to theme the chrome.
-    public var theme: @Sendable @MainActor (AppState) -> NookResolvedTheme
+    /// Content the compact pill grows to show below its slots when it peeks: a song's title and
+    /// progress, a timer's time left. `nil` (the default) means this module has no peek, so a
+    /// peek-first hover opens the nook instead. Use ``setPeek(_:)`` to set it from a
+    /// `@ViewBuilder`. It renders in the chrome environment, like the compact slots.
+    public var peek: (@Sendable @MainActor () -> AnyView)?
+
+    /// Resolves the chrome palette. Defaults to ``chromeTheme``'s palette for the person's
+    /// preferences (``NookResolvedTheme/live(appState:theme:)``), which with no theme is the
+    /// framework's own; supply a closure returning a host-built ``NookResolvedTheme`` to
+    /// compute the palette in code.
+    ///
+    /// A closure you assign replaces the palette ``chromeTheme`` would resolve, as a whole:
+    /// it is the escape hatch for a palette that depends on app state. Prefer
+    /// ``chromeTheme`` for a palette that is data.
+    public var theme: @Sendable @MainActor (AppState) -> NookResolvedTheme {
+        get {
+            if let paletteOverride { return paletteOverride }
+            let chromeTheme = chromeTheme ?? .standard
+            return { NookResolvedTheme.live(appState: $0, theme: chromeTheme) }
+        }
+        set { paletteOverride = newValue }
+    }
+
+    /// The palette closure a host assigned to ``theme``, if any.
+    var paletteOverride: (@Sendable @MainActor (AppState) -> NookResolvedTheme)?
+
+    /// The chrome's look as data: knobs, tokens, and backdrops. See ``NookTheme``.
+    ///
+    /// `nil` (the default) uses the host's ``NookHostConfiguration/chromeTheme``, or
+    /// ``NookTheme/standard`` - the framework's look - when the host sets none. A module's
+    /// theme replaces the host's as a whole; the chrome applies the displayed module's theme
+    /// when a module switch, or a background module's urgent claim, puts its content on the
+    /// surface.
+    ///
+    /// ```swift
+    /// configuration.chromeTheme = NookTheme(accent: "#3399FF", radius: .large)
+    /// configuration.chromeTheme = try NookTheme(contentsOf: themeURL)
+    /// ```
+    ///
+    /// The explicit settings still win where they are set: a ``theme`` closure replaces the
+    /// palette, a non-`nil` ``style`` or ``transitions`` replaces the theme's shape or curves,
+    /// a ``NookChromeBehavior/backdrop`` resolver replaces its backdrops, and a field of
+    /// ``metrics``, ``typography``, or ``motion`` that differs from its framework default
+    /// replaces that one field. A field set back to its framework default reads as unset;
+    /// use the theme's tokens to set a field to the default value under a theme that
+    /// changes it.
+    public var chromeTheme: NookTheme? {
+        didSet { resolvedThemeTokens = chromeTheme?.resolvedTokens() }
+    }
+
+    /// A chrome theme that changes while the nook runs - replaced in code, or reloaded from a
+    /// theme file on every save (``NookThemeSource/watching(fileAt:debounce:)``). When set, its
+    /// theme is this configuration's ``chromeTheme``, and each new one is applied like
+    /// ``AppCoordinator/reloadActiveConfiguration()``. `nil` (the default) is none.
+    public var chromeThemeSource: NookThemeSource?
+
+    /// Backdrop views a theme names by id, for a ``NookBackdropDescription/custom(id:fallback:)``
+    /// backdrop: a theme file cannot hold a view, so it names one and the host supplies it.
+    /// Each resolver gets the same ``NookBackdropContext`` a ``NookChromeBehavior/backdrop``
+    /// resolver does. A theme naming an id with nothing registered paints its fallback.
+    ///
+    /// ```swift
+    /// configuration.themeBackdrops["com.example.aurora"] = { context in
+    ///     .custom(.init(id: "com.example.aurora") { _ in AuroraView() })
+    /// }
+    /// ```
+    public var themeBackdrops: [String: NookChromeBehavior.BackdropResolver] = [:]
+
+    /// ``chromeTheme``'s tokens, resolved once when it is set rather than on every render.
+    private(set) var resolvedThemeTokens: NookResolvedTokens?
 
     /// Replaces the built-in Settings surface (reached via the gear) with host content.
     /// `nil` (the default) uses the framework Settings UI. Use ``setSettings(_:)`` to set
     /// it from a `@ViewBuilder`. Gated by ``NookTopBarConfiguration/showsSettings`` like
     /// the built-in screen; the host view reads ``AppState`` via `@EnvironmentObject`.
+    ///
+    /// The built-in screen's groups are public, so a host screen can keep any of them beside
+    /// its own: ``NookAppearanceSettingsSection``, ``NookDisplaySettingsSection``,
+    /// ``NookShortcutSettingsSection``, ``NookResetSettingsSection``, and
+    /// ``NookAboutSettingsSection``, each in a ``NookSettingsGroup``.
     public var settings: (@Sendable @MainActor () -> AnyView)? = nil
 
-    /// Extra host sections for the framework's **built-in** Settings surface. By default they
-    /// render below the framework groups and above About. A host may place them by stable id in
-    /// ``NookBuiltInSettingsConfiguration/groups`` without replacing the Settings UI. Empty
+    /// Extra host sections appended to the framework's **built-in** Settings surface, rendered
+    /// below the framework groups (Appearance, Display, ...) and above About. Empty (the default)
     /// leaves Settings unchanged. Ignored when ``settings`` fully replaces the built-in screen.
+    /// Use ``addSettingsSection(id:title:content:)`` to append one from a `@ViewBuilder`.
     public var settingsSections: [NookSettingsSection] = []
 
-    /// Fine-grained visibility and reset behavior for the framework-owned Settings UI.
-    /// Defaults preserve every built-in control. Ignored when ``settings`` replaces the
-    /// complete surface. See ``NookBuiltInSettingsConfiguration``.
-    public var builtInSettings: NookBuiltInSettingsConfiguration = .default
+    /// The framework groups the **built-in** Settings screen shows. Defaults to
+    /// ``NookSettingsGroups/all``. Leave a group out to hide it while keeping the rest of the
+    /// screen:
+    ///
+    /// ```swift
+    /// configuration.settingsGroups = [.appearance, .shortcut, .about]  // no Display or Data
+    /// ```
+    ///
+    /// Ignored when ``settings`` replaces the built-in screen; a host screen shows the groups it
+    /// wants by placing ``NookAppearanceSettingsSection``, ``NookDisplaySettingsSection``,
+    /// ``NookShortcutSettingsSection``, ``NookResetSettingsSection``, and
+    /// ``NookAboutSettingsSection`` in ``NookSettingsGroup``s.
+    public var settingsGroups: NookSettingsGroups = .all
 
     /// Top-bar configuration - leading cluster (title/icon), and the two visibility
     /// flags for the top bar and the Settings UI. Grouped so the related knobs
@@ -134,14 +215,32 @@ public struct NookConfiguration: Sendable {
 
     /// Overrides the chrome's corner radii - the small rounding into the notch arch and
     /// the larger rounding where the panel meets the wallpaper. `nil` (the default) uses
-    /// the framework's radii, tuned to sit well under the menu bar on notched MacBooks.
-    /// See ``NookStyle``.
+    /// the framework's radii, ``defaultStyle``, tuned to sit well under the menu bar on
+    /// notched MacBooks. See `NookStyle`.
+    ///
+    /// Applied at launch, by ``AppCoordinator/reloadActiveConfiguration()``, and when a module
+    /// switch (or a background module's urgent claim) puts this configuration's content on
+    /// the surface. With ``chromeTheme`` set, `nil` uses the theme's shape.
     public var style: NookStyle? = nil
 
+    /// The chrome's shape when ``style`` is `nil`: 19 pt corners into the notch arch, 24 pt
+    /// corners where the panel meets the wallpaper, and the standard expanded-content
+    /// insets. Start from it to change one value:
+    ///
+    /// ```swift
+    /// var style = NookConfiguration.defaultStyle
+    /// style.bottomCornerRadius = 30
+    /// configuration.style = style
+    /// ```
+    public static let defaultStyle = NookStyle(topCornerRadius: 19, bottomCornerRadius: 24)
+
     /// Overrides the expand / collapse / compact<->expanded animation curves. `nil` (the
-    /// default) uses the framework's soft springs. Supply a ``NookTransitionConfiguration``
+    /// default) uses the framework's soft springs. Supply a `NookTransitionConfiguration`
     /// to retune or to slow the chrome down (set its `animationDuration` so awaited
     /// `expand()`/`compact()` still return once the chrome has visibly arrived).
+    ///
+    /// Applied when ``style`` is, and like it. With ``chromeTheme`` set, `nil` uses the
+    /// theme's curves and content transitions.
     public var transitions: NookTransitionConfiguration? = nil
 
     /// Fixed width, in points, for the expanded surface's inner content column. `nil`
@@ -150,9 +249,9 @@ public struct NookConfiguration: Sendable {
     /// doesn't resize when switching between the home and Settings surfaces.
     ///
     /// Usable width for edge-aligned content is not simply `expandedWidth`: the chrome
-    /// applies ``NookStyle/expandedContentInsets`` and ``NookChromeMetrics/edgePadding``
+    /// applies `NookStyle.expandedContentInsets` and ``NookChromeMetrics/edgePadding``
     /// before your home view lays out, and hosts read the residual clearance through
-    /// ``EnvironmentValues/nookContentInsets``. See `Examples/LayoutNook/main.swift`
+    /// `\.nookContentInsets`. See `Examples/LayoutNook/main.swift`
     /// and the site guide *Layout and content insets* for how the knobs compose.
     ///
     /// Bottom command rows that should span the full content column should use
@@ -160,6 +259,61 @@ public struct NookConfiguration: Sendable {
     /// `nookContentInsets` on the sides and bottom - not shrink-wrap to their buttons
     /// and not add a separate `.padding(.horizontal, ...)` on the home root.
     public var expandedWidth: CGFloat? = nil
+
+    /// Host surfaces floated beside the nook - an action pill under the expanded panel, a
+    /// round button beside it - in registration order. Empty (the default) renders the chrome
+    /// exactly as before. Use ``addCompanion(id:anchor:spacing:gap:rowAlignment:visibility:shape:backdrop:style:size:presence:hidesInSettings:accessibilityLabel:theme:content:)``
+    /// to append one; see ``NookCompanion``.
+    ///
+    /// The array can also be built from data. A companion whose id an earlier one (here or in
+    /// ``companionSource``) already has is left off the surface, and the chrome logs it.
+    public var companions: [NookCompanion] = []
+
+    /// Companions that can change while the nook runs, shown after ``companions``. Add, remove,
+    /// or replace them on the source and the surface follows at once, with no
+    /// ``AppCoordinator/reloadActiveConfiguration()``. `nil` (the default) is none. See
+    /// ``NookCompanionSource``.
+    public var companionSource: NookCompanionSource?
+
+    /// The module's widgets, in order, for boards and grids. Empty by default. Use
+    /// ``addWidget(_:)`` to append one; see ``NookWidget``. A board shows the widgets of every
+    /// loaded module (``NookBoardConfiguration``); a widget whose id an earlier one (here or in
+    /// ``widgetSource``) already has is left out.
+    public var widgets: [NookWidget] = []
+
+    /// Widgets that can change while the nook runs, after ``widgets``. `nil` (the default) is
+    /// none. See ``NookWidgetSource``.
+    public var widgetSource: NookWidgetSource?
+
+    /// How every companion is drawn unless it sets its own ``NookCompanion/style``. Defaults to
+    /// `.standard`: the companion's backdrop, padded and sized by ``companionSize``.
+    ///
+    /// ```swift
+    /// configuration.companionStyle = .faded  // solid at the chrome, thinning away from it
+    /// ```
+    public var companionStyle: AnyNookCompanionStyle = .standard
+
+    /// The size every companion shares with its controls unless it sets its own
+    /// ``NookCompanion/size``. Defaults to `.regular`: 40 pt surfaces around 32 pt controls, so
+    /// companions side by side are the same height.
+    public var companionSize: NookCompanionSize = .regular
+
+    /// How every companion appears and disappears unless it sets its own
+    /// ``NookCompanion/presence``. Defaults to `.fold`.
+    public var companionPresence: NookCompanionPresence = .fold
+
+    /// How the chrome draws its glowing rim while content lights it with
+    /// `nookRimGlow(_:)` - for example a blue rim while work is running. The rim only
+    /// appears while some content publishes a color, so the default style draws nothing on
+    /// its own. See `NookRimGlowStyle`.
+    public var rimGlow: NookRimGlowStyle = .standard
+
+    /// A soft fade where scrolling content meets the panel's edges, instead of a hard clip.
+    /// `nil` (the default) is off. When set, the framework's own scroll views (Settings, the
+    /// `NookComponents` shelf) fade, and host scroll views follow the same setting by
+    /// applying `nookScrollEdgeFade(axes:)`. Uses Apple's soft scroll edge effect on
+    /// macOS 26 and a gradient mask on macOS 15. See `NookScrollEdgeFade`.
+    public var scrollEdgeFade: NookScrollEdgeFade? = nil
 
     /// Called when the chrome transitions into the expanded surface (from any source).
     ///
@@ -199,10 +353,6 @@ public struct NookConfiguration: Sendable {
         compactLeading = { AnyView(NookCompactLeadingView()) }
         compactTrailing = { AnyView(NookCompactTrailingView()) }
         attachedAccessory = nil
-        // Wrapped in a closure literal rather than passed as a bare function reference:
-        // the `theme` slot is `@Sendable`, and a closure that captures nothing and just
-        // forwards to the `@MainActor` `live(appState:)` satisfies that cleanly.
-        theme = { NookResolvedTheme.live(appState: $0) }
         topBar = .default
     }
 
@@ -241,6 +391,13 @@ public struct NookConfiguration: Sendable {
         attachedAccessory = NookAttachedAccessoryConfiguration(style: style, content: content)
     }
 
+    /// Registers the view the compact pill grows to show when it peeks. See ``peek``.
+    public mutating func setPeek<Content: View & Sendable>(
+        @ViewBuilder _ content: @escaping @Sendable @MainActor () -> Content
+    ) {
+        peek = { AnyView(content()) }
+    }
+
     /// Registers a custom Settings surface from a `@ViewBuilder` closure, replacing the
     /// framework's built-in Settings screen. Reachable via the gear (keep
     /// ``NookTopBarConfiguration/showsSettings`` on); the content can read ``AppState``
@@ -262,6 +419,78 @@ public struct NookConfiguration: Sendable {
         settingsSections.append(
             NookSettingsSection(id: id, title: title, content: content)
         )
+    }
+
+    /// Appends a companion surface - a host view floated beside the nook - from a
+    /// `@ViewBuilder`. See ``NookCompanion`` for what each parameter controls.
+    ///
+    /// ```swift
+    /// configuration.addCompanion(id: "actions") { ActionPill() }
+    /// configuration.addCompanion(id: "timer", anchor: .trailing, visibility: .both, shape: .circle) {
+    ///     TimerButton()
+    /// }
+    /// configuration.addCompanion(id: "leave", gap: 16, style: .raised, presence: .pop) {
+    ///     LeaveButton()
+    /// }
+    /// ```
+    ///
+    /// Traps on an `id` already registered on this configuration: the id keys the companion's
+    /// hover tracking and accessibility identifier, and two companions sharing one would
+    /// silently merge both.
+    public mutating func addCompanion<Content: View & Sendable>(
+        id: String,
+        anchor: NookCompanionAnchor = .below,
+        spacing: CGFloat = NookCompanionSurface.defaultSpacing,
+        gap: CGFloat? = nil,
+        rowAlignment: NookCompanionAnchor.Alignment? = nil,
+        visibility: NookCompanionVisibility = .expanded,
+        shape: NookCompanionShape = .capsule,
+        backdrop: NookCompanionBackdrop = .inherit,
+        style: AnyNookCompanionStyle? = nil,
+        size: NookCompanionSize? = nil,
+        presence: NookCompanionPresence? = nil,
+        hidesInSettings: Bool = true,
+        accessibilityLabel: String? = nil,
+        theme: (@Sendable @MainActor (AppState) -> NookResolvedTheme)? = nil,
+        @ViewBuilder content: @escaping @Sendable @MainActor () -> Content
+    ) {
+        precondition(
+            !companions.contains(where: { $0.id == id }),
+            "NookConfiguration: duplicate companion id '\(id)'. Companion ids must be unique within a "
+                + "configuration - they key hover tracking and the accessibility identifier."
+        )
+        companions.append(
+            NookCompanion(
+                id: id,
+                anchor: anchor,
+                spacing: spacing,
+                gap: gap,
+                rowAlignment: rowAlignment,
+                visibility: visibility,
+                shape: shape,
+                backdrop: backdrop,
+                style: style,
+                size: size,
+                presence: presence,
+                hidesInSettings: hidesInSettings,
+                accessibilityLabel: accessibilityLabel,
+                theme: theme,
+                content: content
+            )
+        )
+    }
+
+    /// Appends a widget for boards and grids. See ``NookWidget``.
+    ///
+    /// Traps on an `id` already registered on this configuration: boards save their layouts by
+    /// widget id, and two widgets sharing one would take each other's place.
+    public mutating func addWidget(_ widget: NookWidget) {
+        precondition(
+            !widgets.contains(where: { $0.id == widget.id }),
+            "NookConfiguration: duplicate widget id '\(widget.id)'. Widget ids must be unique within a "
+                + "configuration - boards save their layouts by them."
+        )
+        widgets.append(widget)
     }
 
     /// Registers host actions for the top bar's trailing cluster from a `@ViewBuilder`
@@ -287,7 +516,7 @@ public struct NookTopBarConfiguration: Sendable {
     /// How the top bar spans the expanded content column.
     public enum Width: Sendable, Equatable {
         /// Leading and trailing clusters share the full column width; trailing icons
-        /// align to ``EnvironmentValues/nookContentInsets`` on the right (matches
+        /// align to `\.nookContentInsets` on the right (matches
         /// LayoutNook host home rows).
         case contentColumn
         /// Shrink-wrap to icon clusters; centered when narrower than the column.
@@ -298,9 +527,11 @@ public struct NookTopBarConfiguration: Sendable {
     /// keep-open lock, gear). Defaults to `true`. Set to `false` for a bare expanded
     /// surface - a pure glance/widget with no framework chrome.
     ///
-    /// With the top bar off the gear is gone, so Settings is unreachable from the
-    /// chrome regardless of ``showsSettings``; the keep-open lock is gone too (it
-    /// lives only in the top bar). Both remain reachable via the menu-bar fallback.
+    /// With the top bar off, its lock and gear go with it. Settings and keep-open stay
+    /// available: put ``NookKeepOpenButton`` and ``NookSettingsButton`` in a companion
+    /// surface or in home content (a companion showing the gear should pass
+    /// `hidesInSettings: false`), call ``NookChromeActions`` from your own controls, or use
+    /// the menu-bar item. ``showsSettings`` still decides whether Settings exists at all.
     public var showsTopBar: Bool
 
     /// Whether the gear and the reachable Settings screen are part of the chrome.
@@ -314,11 +545,29 @@ public struct NookTopBarConfiguration: Sendable {
     /// built-in Settings surface. Leaving it `nil` preserves the default in-panel Settings
     /// behavior and keeps all existing host sections reachable exactly as before.
     public var onSettingsRequest: (@Sendable @MainActor () -> Void)?
+    /// Whether the top bar renders the keep-open lock. Defaults to `true`. Set to `false`
+    /// to take the lock out of the bar - for example to show ``NookKeepOpenButton`` in a
+    /// companion surface instead. Keep-open itself stays available: the Settings row, the
+    /// menu-bar item, and ``NookChromeActions/toggleKeepOpen`` still reach it.
+    public var showsKeepOpenButton: Bool = true
+
+    /// Whether the top bar renders the Settings gear. Defaults to `true`. Unlike
+    /// ``showsSettings``, turning this off removes only the gear: Settings stays reachable
+    /// through ``NookSettingsButton`` (say, in a companion surface),
+    /// ``NookChromeActions/toggleSettings``, the menu-bar item, and
+    /// ``AppCoordinator/showSettings()``.
+    public var showsSettingsButton: Bool = true
 
     /// Whether the framework's transient status banner (driven by ``AppState/status``)
     /// renders under the top bar. Defaults to `true`. Set to `false` to suppress the
     /// framework banner - e.g. a host surfacing status inside its own home content.
     public var showsStatusBanner: Bool
+
+    /// How the home and Settings content keeps clear of the hardware notch. Defaults to
+    /// ``NookNotchClearance/automatic``: the content starts below the notch whether or not
+    /// the top bar is showing. Set ``NookNotchClearance/manual`` to let the content run up
+    /// beside the notch while the bar is hidden, and lay it out around the notch yourself.
+    public var notchClearance: NookNotchClearance = .automatic
 
     /// The label for the top bar's leading cluster. Defaults to `"Home"` - override
     /// so the bar communicates *product* context (a date, a section name) rather
@@ -363,6 +612,30 @@ public struct NookTopBarConfiguration: Sendable {
     /// shrink-wrapped, centered bar.
     public var width: Width
 
+    /// The SF Symbols the bar draws: the lock in both states, the gear, the breadcrumb
+    /// separator, the back control, and the module switcher's glyphs. Defaults reproduce
+    /// today's. ``NookKeepOpenButton`` and ``NookSettingsButton`` draw the same glyphs.
+    public var symbols: NookChromeSymbols = .default
+
+    /// A view for the leading cluster's icon, in place of ``leadingIcon`` and the brand mark.
+    /// `nil` (the default) keeps them. The closure receives the color to draw in: the idle
+    /// icon color (``NookResolvedTheme/headerInactiveIcon``) beside the title, or the back
+    /// control's idle, hover, or active color in Settings and under a breadcrumb. Use
+    /// ``setLeadingIcon(_:)`` to set it from a `@ViewBuilder`.
+    ///
+    /// `@Sendable @MainActor`, like the other view closures.
+    public var leadingIconView: (@Sendable @MainActor (Color) -> AnyView)? = nil
+
+    /// Replaces the whole bar with a host view. `nil` (the default) draws the framework bar.
+    /// The closure receives a ``NookTopBarContext`` carrying the bar's state and actions -
+    /// the title, keep-open, Settings, back, and module switching - so a host bar keeps the
+    /// framework's behavior. Use ``setContent(_:)``, or ``NookConfiguration/setTopBar(_:)``.
+    ///
+    /// ``showsTopBar`` and ``showsStatusBanner`` still apply; the visibility flags for the
+    /// lock and gear, ``leadingIcon``, ``trailingItems``, and ``width`` describe the
+    /// framework bar and are the host bar's to honor or ignore.
+    public var content: (@Sendable @MainActor (NookTopBarContext) -> AnyView)? = nil
+
     public init(
         showsTopBar: Bool = true,
         showsSettings: Bool = true,
@@ -385,4 +658,63 @@ public struct NookTopBarConfiguration: Sendable {
 
     /// The framework-demo defaults - top bar on, Settings on, "Home" with the brand mark.
     public static let `default` = NookTopBarConfiguration()
+}
+
+// MARK: - The chrome look this configuration resolves to
+
+extension NookConfiguration {
+    /// The theme this configuration draws with: its own, or the standard one. The host's
+    /// theme is filled in by ``ModuleHost`` before the chrome reads this.
+    var effectiveChromeTheme: NookTheme {
+        chromeTheme ?? .standard
+    }
+
+    /// The chrome theme's tokens, resolved.
+    var effectiveThemeTokens: NookResolvedTokens {
+        resolvedThemeTokens ?? .standard
+    }
+
+    /// ``metrics`` over the theme's: each field the host changed from its framework default
+    /// keeps the host's value, and every other field takes the theme's.
+    var effectiveMetrics: NookChromeMetrics {
+        guard let tokens = resolvedThemeTokens else { return metrics }
+        var resolved = tokens.metrics
+        for field in NookResolvedTokens.metricFields
+        where metrics[keyPath: field.keyPath] != NookChromeMetrics.default[keyPath: field.keyPath] {
+            resolved[keyPath: field.keyPath] = metrics[keyPath: field.keyPath]
+        }
+        return resolved
+    }
+
+    /// ``typography`` over the theme's, field by field like ``effectiveMetrics``.
+    var effectiveTypography: NookChromeTypography {
+        guard let tokens = resolvedThemeTokens else { return typography }
+        var resolved = tokens.typography
+        for field in NookResolvedTokens.typographyFields
+        where typography[keyPath: field.keyPath] != NookChromeTypography.default[keyPath: field.keyPath] {
+            resolved[keyPath: field.keyPath] = typography[keyPath: field.keyPath]
+        }
+        return resolved
+    }
+
+    /// ``motion`` over the theme's, field by field like ``effectiveMetrics``.
+    var effectiveMotion: NookChromeMotion {
+        guard let tokens = resolvedThemeTokens else { return motion }
+        var resolved = tokens.motion
+        for field in NookResolvedTokens.motionFields
+        where motion[keyPath: field.keyPath] != NookChromeMotion.default[keyPath: field.keyPath] {
+            resolved[keyPath: field.keyPath] = motion[keyPath: field.keyPath]
+        }
+        return resolved
+    }
+
+    /// ``style``, or the theme's shape, or ``defaultStyle``.
+    var effectiveStyle: NookStyle {
+        style ?? resolvedThemeTokens?.style ?? Self.defaultStyle
+    }
+
+    /// ``transitions``, or the theme's curves, or `nil` for the framework's default springs.
+    var effectiveTransitions: NookTransitionConfiguration? {
+        transitions ?? resolvedThemeTokens?.transitionConfiguration
+    }
 }

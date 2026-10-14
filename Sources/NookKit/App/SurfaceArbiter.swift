@@ -21,6 +21,12 @@ import NookSurface
 ///   the stack without disturbing the surface.
 /// - The surface restores to its pre-presentation state only when the *last* claim
 ///   ends, so a run of back-to-back or stacked claims never flickers home in between.
+/// - A module that is being switched away from (its `prepareForSwitchAway` has not
+///   finished) is denied outright, whatever the priority.
+///
+/// Whenever the claim on top of the stack changes hands, `topClaimChanged` runs so the
+/// coordinator can put the top claim's module's content on the surface - a background
+/// module's urgent claim shows *that* module, not the foreground one.
 ///
 /// The arbiter is policy only. It owns no surface state machine: every expand/compact/
 /// hide it performs is handed to `runSerial`, which threads it through
@@ -63,8 +69,17 @@ final class SurfaceArbiter {
     private let currentState: @MainActor () -> NookState
     private let runSerial: @MainActor (@escaping @Sendable @MainActor () async -> Void) async -> Void
     private let expand: @MainActor () async -> Void
+    /// Grows the pill into the presented module's peek; `false` when there is none to show.
+    private let peek: @MainActor () async -> Bool
+    private let endPeek: @MainActor () async -> Void
     private let compact: @MainActor () async -> Void
     private let hide: @MainActor () async -> Void
+    private let topClaimChanged: @MainActor () -> Void
+
+    /// Modules being switched away from: their claims were invalidated by the switch and
+    /// new ones are denied until the coordinator has finished the switch away
+    /// (`prepareForSwitchAway`, `onDeactivate`, any unload). Written by the coordinator.
+    var retiringModuleIDs: Set<String> = []
 
     init(
         isUserEngaged: @escaping @MainActor () -> Bool,
@@ -72,16 +87,22 @@ final class SurfaceArbiter {
         currentState: @escaping @MainActor () -> NookState,
         runSerial: @escaping @MainActor (@escaping @Sendable @MainActor () async -> Void) async -> Void,
         expand: @escaping @MainActor () async -> Void,
+        peek: @escaping @MainActor () async -> Bool = { false },
+        endPeek: @escaping @MainActor () async -> Void = {},
         compact: @escaping @MainActor () async -> Void,
-        hide: @escaping @MainActor () async -> Void
+        hide: @escaping @MainActor () async -> Void,
+        topClaimChanged: @escaping @MainActor () -> Void = {}
     ) {
         self.isUserEngaged = isUserEngaged
         self.activeModuleID = activeModuleID
         self.currentState = currentState
         self.runSerial = runSerial
         self.expand = expand
+        self.peek = peek
+        self.endPeek = endPeek
         self.compact = compact
         self.hide = hide
+        self.topClaimChanged = topClaimChanged
     }
 
     /// `true` while at least one claim holds the surface.
@@ -93,6 +114,9 @@ final class SurfaceArbiter {
     /// The set of module ids that currently hold at least one outstanding claim.
     var presentingModuleIDs: Set<String> { Set(stack.map { $0.claim.moduleID }) }
 
+    /// The module whose claim is on screen, or `nil` when idle.
+    var topModuleID: String? { stack.last?.claim.moduleID }
+
     /// Grants `claim` the surface when it outranks the current holder, the user is not
     /// engaging the surface, and a background module's claim is `.urgent`. The decision
     /// runs on the serial lifecycle chain, so it is made *after* any queued user-driven
@@ -100,6 +124,8 @@ final class SurfaceArbiter {
     func begin(_ claim: NookSurfaceClaim) async -> NookSurfaceToken? {
         var granted: NookSurfaceToken?
         await runSerial { [self] in
+            // A module mid switch-away is quiescing; it gets nothing.
+            if retiringModuleIDs.contains(claim.moduleID) { return }
             // A background module reaches the surface only with an urgent claim.
             if claim.moduleID != activeModuleID(), claim.priority < .urgent { return }
             // The user owns the surface whenever they are engaging it.
@@ -118,7 +144,12 @@ final class SurfaceArbiter {
             stack.append(Entry(token: token, claim: claim))
             liveTokens.insert(token)
             armWatchdog(for: token, claim: claim)
-            await expand()
+            // Content first, so the surface opens onto the claiming module's views.
+            topClaimChanged()
+            // A peek claim grows the pill when the module has a peek; otherwise, and for every
+            // other claim, the surface opens.
+            let peeked = claim.presentation == .peek ? await peek() : false
+            if !peeked { await expand() }
             granted = token
         }
         return granted
@@ -144,10 +175,29 @@ final class SurfaceArbiter {
             // Same logging idiom as `AppCoordinator.runWithTimeout`. The
             // synthetic `end` re-enters the serial chain just like a presenter-driven
             // end, so it cannot race other transitions.
-            print("[OpenNook] SurfaceArbiter watchdog: claim from '\(moduleID)' " +
-                "exceeded \(maxDuration); auto-releasing")
+            print(
+                "[OpenNook] SurfaceArbiter watchdog: claim from '\(moduleID)' "
+                    + "exceeded \(maxDuration); auto-releasing"
+            )
             await self.end(token)
         }
+    }
+
+    /// Ends the claim for `token` `delay` from now, replacing its watchdog (or a previous
+    /// scheduled end), so calling it again moves the end. A scheduled end is the presenter's
+    /// intent, not a leak, so it logs nothing. Returns `false` for a stale token.
+    func end(_ token: NookSurfaceToken, after delay: Duration) async -> Bool {
+        var isLive = false
+        await runSerial { [self] in
+            guard liveTokens.contains(token) else { return }
+            isLive = true
+            cancelWatchdog(for: token)
+            watchdogs[token] = Task { [weak self] in
+                guard (try? await Task.sleep(for: delay)) != nil, let self else { return }
+                await self.end(token)
+            }
+        }
+        return isLive
     }
 
     /// Cancels a granted claim's watchdog and forgets it. Called from the only two
@@ -175,6 +225,7 @@ final class SurfaceArbiter {
         if stack.isEmpty {
             baseRestoreState = nil
         }
+        topClaimChanged()
     }
 
     /// Releases the claim for `token`. When it was the last outstanding claim the
@@ -190,16 +241,26 @@ final class SurfaceArbiter {
             cancelWatchdog(for: token)
             guard let index = stack.firstIndex(where: { $0.token == token }) else { return }
             stack.remove(at: index)
-            // A surviving claim still holds the surface - leave it expanded.
-            guard stack.isEmpty else { return }
+            // A surviving claim still holds the surface - leave it expanded, showing
+            // whichever module's claim is on top now.
+            guard stack.isEmpty else {
+                topClaimChanged()
+                return
+            }
 
             let restoreTo = baseRestoreState ?? .compact
             baseRestoreState = nil
+            // The surface goes back to the foreground module's content only after it has
+            // collapsed, so the claiming module's content does not swap out mid-collapse.
+            defer { topClaimChanged() }
             guard !isUserEngaged() else { return }
             switch restoreTo {
-            case .compact: await compact()
-            case .hidden: await hide()
-            case .expanded: break
+                case .compact:
+                    // A peek claim left the pill compact but grown; the restore shrinks it.
+                    await endPeek()
+                    await compact()
+                case .hidden: await hide()
+                case .expanded: break
             }
         }
     }

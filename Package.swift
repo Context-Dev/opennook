@@ -29,10 +29,11 @@ var package = Package(
         // product to their target's dependencies only when they want it; it is not
         // pulled in by `NookApp`.
         .library(name: "NookComponents", targets: ["NookComponents"]),
-        // Example apps under `Examples/` - each a single `main.swift` showing one
-        // way to build on OpenNook through public API only. Run with `swift run
+        // Example apps under `Examples/` - each showing one way to build on OpenNook
+        // through public API only, most in a single `main.swift`. Run with `swift run
         // HelloNook` (or `ClockNook` / `ThemedNook` / `ChromeNook` / `LayoutNook` /
-        // `ShelfNook` / `ActivityNook` / `VolumeNook` / `MultiNook`).
+        // `ShelfNook` / `ActivityNook` / `VolumeNook` / `MultiNook` / `CompanionNook` /
+        // `PlaygroundNook` / `ShowcaseNook`).
         .executable(name: "HelloNook", targets: ["HelloNook"]),
         .executable(name: "ClockNook", targets: ["ClockNook"]),
         .executable(name: "ThemedNook", targets: ["ThemedNook"]),
@@ -41,7 +42,10 @@ var package = Package(
         .executable(name: "ShelfNook", targets: ["ShelfNook"]),
         .executable(name: "ActivityNook", targets: ["ActivityNook"]),
         .executable(name: "VolumeNook", targets: ["VolumeNook"]),
-        .executable(name: "MultiNook", targets: ["MultiNook"])
+        .executable(name: "MultiNook", targets: ["MultiNook"]),
+        .executable(name: "CompanionNook", targets: ["CompanionNook"]),
+        .executable(name: "PlaygroundNook", targets: ["PlaygroundNook"]),
+        .executable(name: "ShowcaseNook", targets: ["ShowcaseNook"]),
     ],
     targets: [
         .target(
@@ -80,9 +84,10 @@ var package = Package(
         ),
         .target(
             // Optional Tier 3 add-on components. Apache-2.0. Depends on NookKit
-            // (for the resolved-theme environment); not part of the default app.
+            // (for the resolved-theme environment) and NookSurface (for the panel-wide
+            // scroll edge fade); not part of the default app.
             name: "NookComponents",
-            dependencies: ["NookKit"],
+            dependencies: ["NookKit", "NookSurface"],
             path: "Sources/NookComponents",
             swiftSettings: strictConcurrency
         ),
@@ -140,10 +145,39 @@ var package = Package(
             path: "Examples/MultiNook",
             swiftSettings: strictConcurrency
         ),
+        .executableTarget(
+            name: "CompanionNook",
+            dependencies: ["NookApp"],
+            path: "Examples/CompanionNook",
+            swiftSettings: strictConcurrency
+        ),
+        .target(
+            // PlaygroundNook's settings model and its Swift and JSON exporters, kept out of
+            // the executable so `PlaygroundNookTests` can test them. Not a product: nothing
+            // outside this package depends on it.
+            name: "PlaygroundNookCore",
+            dependencies: ["NookKit", "NookSurface"],
+            path: "Examples/PlaygroundNook/Core",
+            swiftSettings: strictConcurrency
+        ),
+        .executableTarget(
+            name: "PlaygroundNook",
+            dependencies: ["NookApp", "PlaygroundNookCore"],
+            path: "Examples/PlaygroundNook/App",
+            swiftSettings: strictConcurrency
+        ),
+        .executableTarget(
+            name: "ShowcaseNook",
+            dependencies: ["NookApp", "NookComponents"],
+            path: "Examples/ShowcaseNook",
+            swiftSettings: strictConcurrency
+        ),
         .testTarget(
             name: "NookKitTests",
             dependencies: ["NookKit", "NookSurface"],
             path: "Tests/NookKitTests",
+            // Read by path from the tests (theme-token-ids.txt), not bundled as a resource.
+            exclude: ["Fixtures"],
             swiftSettings: strictConcurrency
         ),
         .testTarget(
@@ -151,7 +185,13 @@ var package = Package(
             dependencies: ["NookComponents"],
             path: "Tests/NookComponentsTests",
             swiftSettings: strictConcurrency
-        )
+        ),
+        .testTarget(
+            name: "PlaygroundNookTests",
+            dependencies: ["PlaygroundNookCore", "NookKit", "NookSurface"],
+            path: "Tests/PlaygroundNookTests",
+            swiftSettings: strictConcurrency
+        ),
     ]
 )
 

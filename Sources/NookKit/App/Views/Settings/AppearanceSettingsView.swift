@@ -11,122 +11,126 @@ import SwiftUI
 /// Theme + surface pickers for host Settings surfaces. Writes through ``AppState/replaceAppearancePreferences(_:)``.
 public struct NookAppearanceSettingsSection: View {
     @ObservedObject public var appState: AppState
-    public let configuration: NookBuiltInSettingsConfiguration
     @Environment(\.nookResolvedTheme) private var theme
+    /// The chrome theme; a control for a choice the theme pins is not shown.
+    @Environment(\.nookTheme) private var chromeTheme
     @Environment(\.nookChromeTypography) private var typography
     @Environment(\.nookChromeMetrics) private var metrics
+    @Environment(\.nookChromeLabels) private var labels
 
-    public init(
-        appState: AppState,
-        configuration: NookBuiltInSettingsConfiguration = .default
-    ) {
+    public init(appState: AppState) {
         self.appState = appState
-        self.configuration = configuration
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: metrics.settingsBlockSpacing) {
-            if configuration.shows(.theme) {
-                labeledPicker(title: "Theme", accessibilityLabel: "Theme") {
-                    Picker("Theme", selection: chromePaletteBinding) {
-                        Text("Match Mac").tag(NookChromePalette.followSystem)
-                        Text("Dark").tag(NookChromePalette.dark)
-                        Text("Light").tag(NookChromePalette.light)
+            labeledPicker(
+                title: labels.appearance.themeTitle,
+                accessibilityLabel: labels.appearance.themeAccessibilityLabel
+            ) {
+                Picker(labels.appearance.themeTitle, selection: chromePaletteBinding) {
+                    Text(labels.appearance.themeFollowSystem).tag(NookChromePalette.followSystem)
+                    Text(labels.appearance.themeDark).tag(NookChromePalette.dark)
+                    Text(labels.appearance.themeLight).tag(NookChromePalette.light)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            .modifier(NookPinnedSettingModifier(isPinned: chromeTheme.palette != nil))
+
+            VStack(alignment: .leading, spacing: metrics.settingsFieldSpacing) {
+                labeledPicker(
+                    title: labels.appearance.surfaceTitle,
+                    accessibilityLabel: labels.appearance.surfaceAccessibilityLabel
+                ) {
+                    Picker(labels.appearance.surfaceTitle, selection: surfaceStyleBinding) {
+                        Text(labels.appearance.surfaceSolid).tag(NookSurfaceStyle.solid)
+                        Text(labels.appearance.surfaceTranslucent).tag(NookSurfaceStyle.translucent)
+                        Text(labels.appearance.surfaceLiquidGlass).tag(NookSurfaceStyle.liquidGlass)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .controlSize(.small)
                 }
-            }
 
-            if configuration.shows(.surface) {
-                VStack(alignment: .leading, spacing: metrics.settingsFieldSpacing) {
-                    labeledPicker(title: "Surface", accessibilityLabel: "Chrome surface") {
-                        Picker("Surface", selection: surfaceStyleBinding) {
-                            Text("Solid").tag(NookSurfaceStyle.solid)
-                            Text("Translucent").tag(NookSurfaceStyle.translucent)
-                            Text("Liquid Glass").tag(NookSurfaceStyle.liquidGlass)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .controlSize(.small)
+                Text(surfaceStyleDescription)
+                    .font(typography.settingsCaption)
+                    .foregroundStyle(theme.tertiaryLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .modifier(NookPinnedSettingModifier(isPinned: chromeTheme.surface != nil))
+
+            VStack(alignment: .leading, spacing: metrics.settingsFieldSpacing) {
+                labeledPicker(
+                    title: labels.appearance.layoutTitle,
+                    accessibilityLabel: labels.appearance.layoutAccessibilityLabel
+                ) {
+                    Picker(labels.appearance.layoutTitle, selection: presentationBinding) {
+                        Text(labels.appearance.layoutAuto).tag(NookPresentation.auto)
+                        Text(labels.appearance.layoutNotch).tag(NookPresentation.notch)
+                        Text(labels.appearance.layoutFloating).tag(NookPresentation.floating)
                     }
-
-                    Text(surfaceStyleDescription)
-                        .font(typography.settingsCaption)
-                        .foregroundStyle(theme.tertiaryLabel)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .controlSize(.small)
                 }
+
+                Text(presentationDescription)
+                    .font(typography.settingsCaption)
+                    .foregroundStyle(theme.tertiaryLabel)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            if configuration.shows(.layout) {
-                VStack(alignment: .leading, spacing: metrics.settingsFieldSpacing) {
-                    labeledPicker(title: "Layout", accessibilityLabel: "Chrome layout") {
-                        Picker("Layout", selection: presentationBinding) {
-                            Text("Auto").tag(NookPresentation.auto)
-                            Text("Notch").tag(NookPresentation.notch)
-                            Text("Floating").tag(NookPresentation.floating)
+            VStack(alignment: .leading, spacing: metrics.settingsFieldSpacing) {
+                Text(labels.appearance.accentTitle)
+                    .font(typography.settingsFieldLabel)
+                    .foregroundStyle(theme.secondaryLabel)
+                LazyVGrid(
+                    columns: accentGridColumns,
+                    alignment: .leading,
+                    spacing: metrics.settingsInlineSpacing
+                ) {
+                    ForEach(NookAccentPreset.allCases) { preset in
+                        Button {
+                            var prefs = appState.appearancePreferences
+                            prefs.accentPreset = preset
+                            appState.replaceAppearancePreferences(prefs)
+                        } label: {
+                            Circle()
+                                .fill(swatchColor(for: preset))
+                                .frame(
+                                    width: metrics.settingsAccentSwatchSize,
+                                    height: metrics.settingsAccentSwatchSize
+                                )
+                                .overlay(
+                                    Circle()
+                                        .stroke(
+                                            accentRingColor(for: preset),
+                                            lineWidth: metrics.settingsAccentSwatchStrokeWidth
+                                        )
+                                )
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .controlSize(.small)
-                    }
-
-                    Text(presentationDescription)
-                        .font(typography.settingsCaption)
-                        .foregroundStyle(theme.tertiaryLabel)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            if configuration.shows(.accent) {
-                VStack(alignment: .leading, spacing: metrics.settingsFieldSpacing) {
-                    Text("Accent")
-                        .font(typography.settingsFieldLabel)
-                        .foregroundStyle(theme.secondaryLabel)
-                    LazyVGrid(
-                        columns: accentGridColumns,
-                        alignment: .leading,
-                        spacing: metrics.settingsInlineSpacing
-                    ) {
-                        ForEach(NookAccentPreset.allCases) { preset in
-                            Button {
-                                var prefs = appState.appearancePreferences
-                                prefs.accentPreset = preset
-                                appState.replaceAppearancePreferences(prefs)
-                            } label: {
-                                Circle()
-                                    .fill(preset.color())
-                                    .frame(
-                                        width: metrics.settingsAccentSwatchSize,
-                                        height: metrics.settingsAccentSwatchSize
-                                    )
-                                    .overlay(
-                                        Circle()
-                                            .stroke(
-                                                accentRingColor(for: preset),
-                                                lineWidth: metrics.settingsAccentSwatchStrokeWidth
-                                            )
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(preset.displayName)
-                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(labels.appearance.accentName(preset))
                     }
                 }
             }
+            .modifier(NookPinnedSettingModifier(isPinned: !chromeTheme.allowsUserAccent))
 
-            if configuration.shows(.backdropStrength),
-                appState.appearancePreferences.surfaceStyle != .solid
+            // The surface the chrome paints, which a theme may pin, decides whether there is a
+            // strength to set; a pinned strength has no slider.
+            if chromeTheme.effectivePreferences(appState.appearancePreferences).surfaceStyle != .solid,
+                chromeTheme.backdropStrength == nil
             {
                 VStack(alignment: .leading, spacing: metrics.settingsFieldSpacing) {
                     Text(strengthLabel)
                         .font(typography.settingsFieldLabel)
                         .foregroundStyle(theme.secondaryLabel)
-                    Slider(value: backdropStrengthBinding, in: 0.35...1)
+                    Slider(value: backdropStrengthBinding, in: NookAppearancePreferences.backdropStrengthRange)
                         .controlSize(.small)
                         .accessibilityLabel(strengthLabel)
-                    Text("Lower shows more wallpaper through the chrome.")
+                    Text(labels.appearance.strengthDetail)
                         .font(typography.settingsCaption)
                         .foregroundStyle(theme.tertiaryLabel)
                         .fixedSize(horizontal: false, vertical: true)
@@ -138,42 +142,27 @@ public struct NookAppearanceSettingsSection: View {
     private var surfaceStyleDescription: String {
         switch surfaceStyleBinding.wrappedValue {
             case .solid:
-                return "Solid paints the chrome the same color as the notch — true black on dark, true white on light."
+                return labels.appearance.surfaceSolidDetail
             case .translucent:
-                return "Translucent shows the wallpaper through a frosted material."
+                return labels.appearance.surfaceTranslucentDetail
             case .liquidGlass:
-                return "Liquid Glass refracts the wallpaper through Apple's glass material on macOS 26, "
-                    + "with a frosted-glass fallback on earlier versions."
+                return labels.appearance.surfaceLiquidGlassDetail
         }
     }
 
-    /// Keeps all core accent choices directly available while reflowing the row at
-    /// narrower host-configured expanded widths.
-    private var accentGridColumns: [GridItem] {
-        [
-            GridItem(
-                .adaptive(
-                    minimum: metrics.settingsAccentSwatchSize,
-                    maximum: metrics.settingsAccentSwatchSize
-                ),
-                spacing: metrics.settingsInlineSpacing,
-                alignment: .leading
-            )
-        ]
-    }
-
     private var strengthLabel: String {
-        surfaceStyleBinding.wrappedValue == .liquidGlass ? "Glass strength" : "Translucency strength"
+        surfaceStyleBinding.wrappedValue == .liquidGlass
+            ? labels.appearance.glassStrengthTitle : labels.appearance.translucencyStrengthTitle
     }
 
     private var presentationDescription: String {
         switch presentationBinding.wrappedValue {
             case .auto:
-                return "Auto uses the notch shape on a notched display and a floating panel on any other."
+                return labels.appearance.layoutAutoDetail
             case .notch:
-                return "Notch always uses the notch shape, even on a display without one."
+                return labels.appearance.layoutNotchDetail
             case .floating:
-                return "Floating always shows a free-standing panel below the menu bar."
+                return labels.appearance.layoutFloatingDetail
         }
     }
 
@@ -193,6 +182,30 @@ public struct NookAppearanceSettingsSection: View {
     }
 
     /// The selected accent swatch's ring color; clear for the unselected swatches.
+    /// A swatch's color. "System" means the theme's accent, which is the macOS accent unless
+    /// the theme sets its own.
+    /// Keeps every accent choice directly available while reflowing the swatches at
+    /// narrower host-configured expanded widths.
+    private var accentGridColumns: [GridItem] {
+        [
+            GridItem(
+                .adaptive(
+                    minimum: metrics.settingsAccentSwatchSize,
+                    maximum: metrics.settingsAccentSwatchSize
+                ),
+                spacing: metrics.settingsInlineSpacing,
+                alignment: .leading
+            )
+        ]
+    }
+
+    private func swatchColor(for preset: NookAccentPreset) -> Color {
+        guard preset == .system else { return preset.color() }
+        var context = chromeTheme.liveContext(appState: appState)
+        context.accentPreset = .system
+        return chromeTheme.color(.accent, in: context)
+    }
+
     private func accentRingColor(for preset: NookAccentPreset) -> Color {
         appState.appearancePreferences.accentPreset == preset
             ? theme.primaryLabel.opacity(metrics.settingsAccentSwatchSelectedOpacity)
@@ -237,9 +250,22 @@ public struct NookAppearanceSettingsSection: View {
             get: { appState.appearancePreferences.backdropStrength },
             set: { next in
                 var prefs = appState.appearancePreferences
-                prefs.backdropStrength = min(max(next, 0.15), 1)
+                prefs.backdropStrength = next
+                prefs.backdropStrength = prefs.clampedBackdropStrength
                 appState.replaceAppearancePreferences(prefs)
             }
         )
+    }
+}
+
+/// Leaves out a Settings control for a choice the chrome theme pins, so a control that
+/// would change nothing is never shown.
+struct NookPinnedSettingModifier: ViewModifier {
+    let isPinned: Bool
+
+    func body(content: Content) -> some View {
+        if !isPinned {
+            content
+        }
     }
 }

@@ -5,8 +5,9 @@ description: Configure the top bar, the gear, and what the chrome shows.
 
 The chrome (top bar, lock for keep-open, and Settings gear) is driven by
 flags on `NookConfiguration.topBar`. You can replace the leading identity
-(label and icon), strip the top bar entirely, or keep the bar while dropping
-the gear.
+(label and icon), change the bar's glyphs, strip the top bar entirely, keep the
+bar while dropping the gear, or draw a bar of your own that keeps the framework's
+behavior.
 
 ```swift
 var configuration = NookConfiguration()
@@ -18,7 +19,21 @@ configuration.topBar.leadingIcon = "house"  // SF Symbol override; nil keeps the
 // Chrome flags.
 configuration.topBar.showsTopBar = true   // false strips top bar + gear + lock
 configuration.topBar.showsSettings = true // false drops the gear (top bar stays)
+configuration.topBar.notchClearance = .automatic  // .manual lets content run up beside the notch
+
+// Move the lock or the gear somewhere else, keeping the feature.
+configuration.topBar.showsKeepOpenButton = true  // false takes the lock out of the bar
+configuration.topBar.showsSettingsButton = true  // false takes the gear out of the bar
+
+// The bar's glyphs, a custom leading icon, or a whole bar of your own.
+configuration.topBar.symbols.settings = "slider.horizontal.3"
+configuration.topBar.setLeadingIcon { color in Monogram(color: color) }
+configuration.setTopBar { bar in MyTopBar(bar: bar) }
 ```
+
+The glyphs, the leading icon view, and the replacement bar are covered in
+[Top-bar glyphs](/guides/chrome-customization/#top-bar-glyphs-topbarsymbols) and
+[Replacing the top bar](/guides/chrome-customization/#replacing-the-top-bar).
 
 ## `showsTopBar`
 
@@ -26,11 +41,116 @@ When `false`, the chrome shell renders only your home view inside the
 expanded surface. No top bar, no gear, no lock. Use this when your view
 owns the entire surface.
 
+Settings and keep-open are still there without the bar. Put `NookKeepOpenButton`
+and `NookSettingsButton` in a companion surface or your home view (see
+[below](#showskeepopenbutton--showssettingsbutton)), call `\.nookChromeActions` from
+your own controls, or use the menu-bar item. `showsSettings` still decides whether
+Settings exists at all.
+
+The content still starts below the notch, where the bar would have ended. To put icons
+beside the notch, or to let the content run up to the top, see
+[Clearing the notch](/guides/layout-and-insets/#clearing-the-notch).
+
 ## `showsSettings`
 
 When `false`, the top bar remains (so the lock and any leading identity are
 still visible) but the gear is removed. Use this when you ship without
 exposing the framework's Settings panels.
+
+## `showsKeepOpenButton` / `showsSettingsButton`
+
+Each removes one glyph from the top bar *without* removing its feature. Keep-open
+stays in Settings and the menu bar, and Settings stays reachable from the menu bar
+and `AppCoordinator.showSettings()`. Use them to show the controls somewhere else -
+typically in a [companion surface](/guides/companion-surfaces/#moving-the-lock-and-gear)
+with the framework's `NookKeepOpenButton` and `NookSettingsButton`, or in your own
+controls through the `\.nookChromeActions` environment value:
+
+```swift
+configuration.topBar.showsKeepOpenButton = false
+configuration.topBar.showsSettingsButton = false
+configuration.addCompanion(id: "chrome-controls", anchor: .trailing, hidesInSettings: false) {
+    ChromeControls()  // a VStack of NookKeepOpenButton() and NookSettingsButton()
+}
+```
+
+## Hiding Settings groups
+
+The built-in Settings screen shows five framework groups - Appearance, Display,
+Shortcut & nook, Data, and About - then any sections you add with
+`addSettingsSection(title:content:)`. Leave a group out of `settingsGroups` to hide
+it and keep the rest:
+
+```swift
+configuration.settingsGroups = [.appearance, .shortcut, .about]  // no Display or Data
+```
+
+## Renaming and translating Settings
+
+Every string the built-in screen draws comes from `NookConfiguration.labels`
+(`NookChromeLabels`): the group titles in `labels.settings`, and the rows of each
+group in `labels.appearance`, `labels.display`, and `labels.shortcut`. The public
+sections read the same labels, so they follow them in a Settings screen of your own.
+
+```swift
+configuration.labels.settings.appearanceTitle = "Look"
+configuration.labels.settings.shortcutTitle = "Keyboard"
+configuration.labels.shortcut.stayExpandedTitle = "Keep open"
+configuration.labels.shortcut.stayExpandedOn = "On - stays open after the pointer leaves"
+configuration.labels.display.builtIn = "This Mac's display"
+```
+
+Renaming a group keeps it open or closed. See
+[Labels](/guides/chrome-customization/#labels) for every group and for templates
+such as `labels.shortcut.showHostFormat` (`"Show {host}"`).
+
+## Building your own Settings screen
+
+`setSettings(_:)` replaces the built-in screen. The framework's groups are public
+views, so your screen keeps the ones you want beside your own, drawn the same way
+with `NookSettingsGroup`:
+
+```swift
+struct MySettings: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                NookSettingsGroup("Account") { AccountRows() }
+                NookSettingsGroup("Appearance") { NookAppearanceSettingsSection(appState: appState) }
+                NookSettingsGroup("Display", isInitiallyExpanded: false) {
+                    NookDisplaySettingsSection(appState: appState)
+                }
+                NookSettingsGroup("Shortcut & nook", isInitiallyExpanded: false) {
+                    NookShortcutSettingsSection(appState: appState)
+                }
+                NookSettingsGroup("Data", isInitiallyExpanded: false) { NookResetSettingsSection() }
+                NookSettingsGroup("About", isInitiallyExpanded: false) { NookAboutSettingsSection() }
+            }
+        }
+    }
+}
+
+configuration.setSettings { MySettings() }
+```
+
+| View | What it shows |
+| --- | --- |
+| `NookAppearanceSettingsSection(appState:)` | Theme, surface, layout, accent, and strength |
+| `NookDisplaySettingsSection(appState:)` | Which display the nook is on |
+| `NookShortcutSettingsSection(appState:)` | The global shortcut, "Stay expanded", haptic feedback, and "Sounds" while the theme has sounds |
+| `NookResetSettingsSection()` | "Reset All Settings" |
+| `NookAboutSettingsSection()` | The host's name, version, and tagline |
+
+Each writes through `AppState` and the chrome's actions, exactly as the built-in
+screen does, so they need to sit inside chrome content - the Settings screen, home,
+or a companion. `NookSettingsGroup` keeps its own open or closed state, or takes an
+`isExpanded` binding.
+
+Reset returns appearance, the shortcut, and the display to your
+`preferenceDefaults` and forgets the person's choices; see
+[Launch defaults](/guides/chrome-customization/#launch-defaults-preferencedefaults).
 
 ## `topBar.leadingTitle` / `topBar.leadingIcon`
 
@@ -39,42 +159,15 @@ are functions of `AppState`, so they can follow your product state.
 
 Defaults are `"Home"` for the title and the OpenNook brand mark for the icon
 (`leadingIcon` is `nil`). Set `leadingIcon` to an SF Symbol name, such as
-`"house"`, to use your own glyph. Set `leadingTitle` to return an empty string
-if you want a title-only cluster with no icon override.
-
-## Extend the built-in Settings screen
-
-Prefer extending the framework Settings screen over replacing it. Host sections use the same
-disclosure layout, metrics, theme, and `AppState` environment as OpenNook's own controls:
-
-```swift
-configuration.addSettingsSection(title: "AI") {
-    AISettingsView()
-}
-```
-
-If a built-in control does not apply to the product, hide only that item and keep the rest of
-the framework UI:
-
-```swift
-configuration.builtInSettings.hiddenItems = [.theme, .surface]
-```
-
-Available items cover appearance, display, shortcut and nook behavior, data actions, and About.
-`onResetAllSettings` runs after OpenNook resets its preferences, so an injected section can join
-the same reset action:
-
-```swift
-configuration.builtInSettings.onResetAllSettings = {
-    productPreferences.reset()
-}
-```
-
-Use `setSettings(_:)` only when the host intentionally owns the complete Settings experience.
+`"house"`, to use your own glyph, or `setLeadingIcon` to draw any view there. Set
+`leadingTitle` to return an empty string if you want a title-only cluster with no
+icon override.
 
 ## See also
 
-- [Theming](/guides/theming/#custom-settings-surface) - extend, trim, or replace the
-  built-in Settings screen.
+- [Companion surfaces](/guides/companion-surfaces/) - floating the lock and gear, or
+  any host control, beside the nook.
+- [Theming](/guides/theming/#custom-settings-surface) - replace the built-in
+  Settings screen with `setSettings(_:)`, the companion to `showsSettings`.
 - [Your first nook](/start/first-nook/#2-customize-via-nookconfiguration) - where
   the `topBar` flags first appear, alongside the other `NookConfiguration` knobs.

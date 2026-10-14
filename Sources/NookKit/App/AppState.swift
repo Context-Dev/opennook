@@ -33,9 +33,11 @@ public struct HotkeyRegistrationFailure: Equatable, Sendable {
         self.combination = combination
     }
 
-    /// A ready-to-show one-line warning for the Settings UI.
+    /// A ready-to-show one-line warning for the Settings UI, in the default English. The
+    /// Settings screen draws ``NookChromeLabels/Shortcut/unavailable(_:)`` with the host's
+    /// labels instead.
     public var message: String {
-        "\(combination) is unavailable — another app may be using it."
+        NookChromeLabels.default.shortcut.unavailable(combination)
     }
 }
 
@@ -56,10 +58,6 @@ enum HotkeyRebindResult: Equatable {
 /// here (simplest), or hold product state in its own type reachable via ``AppServices``
 /// (better separation, scales across multi-module hosts).
 public final class AppState: ObservableObject {
-    /// The host's effective preference defaults captured at launch. Persisted user
-    /// choices still win during initialization; Settings Reset returns to this bag
-    /// rather than silently substituting the framework defaults.
-    public let preferenceDefaults: NookPreferenceDefaults
 
     /// Which framework chrome screen the expanded surface is showing. Written via
     /// ``showHome()``/``showSettings()``; observed by `NookExpandedView`.
@@ -68,7 +66,18 @@ public final class AppState: ObservableObject {
     /// Persisted appearance personalization (palette, surface style, presentation,
     /// haptics, keep-open). Assigning replaces the whole value - use
     /// ``replaceAppearancePreferences(_:)`` to also persist the change.
+    ///
+    /// Only the fields the person changed are persisted. Every other field is the host's launch
+    /// default (``preferenceDefaults``), so a default the host changes in a later build reaches
+    /// everyone who never chose that field.
     @Published public var appearancePreferences = NookAppearancePreferences.default
+
+    /// The host's launch defaults this state was created with: the values every preference takes
+    /// until the person changes it, and returns to on reset. See ``NookPreferenceDefaults``.
+    public let preferenceDefaults: NookPreferenceDefaults
+
+    /// The appearance fields the person changed, as persisted.
+    private var appearanceChoices = NookAppearanceChoices()
 
     /// The user-configured global show/hide shortcut. Persisted to `UserDefaults` only
     /// when written through ``replaceHotkey(_:)``.
@@ -92,7 +101,7 @@ public final class AppState: ObservableObject {
     }
 
     /// `true` while the nook surface is expanded. This is a read-only mirror of the
-    /// surface's own ``NookState`` - the coordinator binds it to `Nook.$state`, so it
+    /// surface's own `NookState` - the coordinator binds it to `Nook.$state`, so it
     /// stays accurate for hover- and drag-driven transitions too, not just
     /// coordinator-initiated show/hide. Drive visibility through ``AppCoordinator``,
     /// never by writing this.
@@ -172,6 +181,11 @@ public final class AppState: ObservableObject {
     /// The chrome treats this as a single drill-down level. Its leading control and
     /// standard trackpad back gesture clear the breadcrumb; the module observes that
     /// clear and pops its own route.
+    ///
+    /// It belongs to the module whose content is on the surface. When that changes - a
+    /// module switch, or a background module's urgent claim taking the surface - the
+    /// coordinator parks the outgoing module's breadcrumb and restores the incoming
+    /// module's (or `nil`). An unloaded module's parked breadcrumb is dropped.
     @Published public var moduleBreadcrumb: String?
 
     /// Loads the persisted appearance, hotkey, and display preferences from
@@ -187,20 +201,55 @@ public final class AppState: ObservableObject {
     /// here, so a persisted user choice always wins.
     public init(preferenceDefaults: NookPreferenceDefaults) {
         self.preferenceDefaults = preferenceDefaults
-        appearancePreferences = NookAppearanceStore.load(default: preferenceDefaults.appearance)
+        appearanceChoices = NookAppearanceStore.loadChoices(default: preferenceDefaults.appearance)
+        appearancePreferences = appearanceChoices.applied(to: preferenceDefaults.appearance)
         hotkey = NookHotkeyStore.load(default: preferenceDefaults.hotkey)
         displayPreference = NookDisplayStore.load(default: preferenceDefaults.display)
     }
 
-    /// Replaces ``appearancePreferences`` and writes the new value to `UserDefaults`. A
-    /// no-op when the value is unchanged. Prefer this over assigning the property
-    /// directly - direct assignment skips persistence.
+    /// Replaces ``appearancePreferences`` and persists the fields that changed. A no-op when the
+    /// value is unchanged. Prefer this over assigning the property directly - direct assignment
+    /// skips persistence.
+    ///
+    /// Each field that differs from the current value is remembered as the person's choice, even
+    /// when it equals the host's default. Fields that did not change are left as they were, so
+    /// ones the person never chose keep following ``preferenceDefaults``.
     public func replaceAppearancePreferences(_ preferences: NookAppearancePreferences) {
         guard preferences != appearancePreferences else {
             return
         }
+        appearanceChoices.record(from: appearancePreferences, to: preferences)
         appearancePreferences = preferences
-        NookAppearanceStore.save(preferences)
+        NookAppearanceStore.saveChoices(appearanceChoices)
+    }
+
+    /// Forgets every appearance choice, returning each field to the host's default in
+    /// ``preferenceDefaults``. From then on every field follows the defaults again.
+    public func resetAppearancePreferences() {
+        appearanceChoices = NookAppearanceChoices()
+        NookAppearanceStore.saveChoices(appearanceChoices)
+        let defaults = preferenceDefaults.appearance
+        if appearancePreferences != defaults {
+            appearancePreferences = defaults
+        }
+    }
+
+    /// Forgets the person's global shortcut, returning to the host's default in
+    /// ``preferenceDefaults``, which it then follows.
+    public func resetHotkey() {
+        NookHotkeyStore.clear()
+        if hotkey != preferenceDefaults.hotkey {
+            hotkey = preferenceDefaults.hotkey
+        }
+    }
+
+    /// Forgets the person's display choice, returning to the host's default in
+    /// ``preferenceDefaults``, which it then follows.
+    public func resetDisplayPreference() {
+        NookDisplayStore.clear()
+        if displayPreference != preferenceDefaults.display {
+            displayPreference = preferenceDefaults.display
+        }
     }
 
     /// Replaces ``hotkey`` and persists. The coordinator's hotkey-registration sink
@@ -239,30 +288,6 @@ public final class AppState: ObservableObject {
         NookDisplayStore.save(preference)
     }
 
-    /// Clears user overrides and applies the host defaults captured at launch without
-    /// writing those defaults back as new overrides. Keeping the stores empty is what
-    /// lets a future app version revise its host defaults for a user who pressed Reset.
-    ///
-    /// `resetHotkey` is false only when Carbon rejected the host's default shortcut;
-    /// in that case the known-working active/persisted shortcut is deliberately kept.
-    func resetPreferencesToHostDefaults(resetHotkey: Bool = true) {
-        NookAppearanceStore.clear()
-        NookDisplayStore.clear()
-        if resetHotkey {
-            NookHotkeyStore.clear()
-        }
-
-        if appearancePreferences != preferenceDefaults.appearance {
-            appearancePreferences = preferenceDefaults.appearance
-        }
-        if resetHotkey, hotkey != preferenceDefaults.hotkey {
-            hotkey = preferenceDefaults.hotkey
-        }
-        if displayPreference != preferenceDefaults.display {
-            displayPreference = preferenceDefaults.display
-        }
-    }
-
     public var isHomeView: Bool {
         viewMode == .home
     }
@@ -288,13 +313,16 @@ public final class AppState: ObservableObject {
         }
 
         guard moduleBreadcrumb?.isEmpty == false else { return false }
+        // A live activity's expanded view sits under its own breadcrumb; back returns home.
         moduleBreadcrumb = nil
+        presentedLiveActivity = nil
         return true
     }
 
     /// Switches the chrome to the home view and clears ``errorMessage``.
     public func showHome() {
         viewMode = .home
+        settingsSetAsideReasons = []
         resetTransientStatus()
     }
 
@@ -303,7 +331,50 @@ public final class AppState: ObservableObject {
     /// ``AppCoordinator/showSettings()``, not here.
     public func showSettings() {
         viewMode = .settings
+        settingsSetAsideReasons = []
         resetTransientStatus()
+    }
+
+    /// The live activity whose expanded view the nook shows in place of the home view, by
+    /// ``NookActivityCenter/Entry/id``, or `nil` for the home view. Set when the nook opens from
+    /// an activity's peek or an expand alert; cleared when the nook collapses or the person goes
+    /// back. Kept by `AppCoordinator`.
+    @Published var presentedLiveActivity: String?
+
+    /// `true` while the host fixes what hovering the compact pill does
+    /// (`NookChromeBehavior.hoverIntent`), so Settings leaves out the rows that would change it.
+    /// Kept current by `AppCoordinator.applyHoverIntent()`.
+    @Published var hostFixesHoverIntent = false
+
+    /// Why Settings is set aside: a surface claim holds the expanded view, or the nook opened
+    /// onto a live activity's expanded view.
+    enum SettingsSetAsideReason: Hashable {
+        case claim
+        case activity
+    }
+
+    /// What is holding Settings aside, empty while it is not. The content that took the
+    /// expanded view Settings had shows instead, and Settings comes back when the last reason
+    /// ends, unless the person changes the view before then.
+    private(set) var settingsSetAsideReasons: Set<SettingsSetAsideReason> = []
+
+    /// Shows home in place of Settings for `reason`, so the content that wants the expanded
+    /// view is what opens. Does nothing outside Settings, unless Settings is already set aside,
+    /// in which case `reason` joins the others in holding it.
+    func setSettingsAside(for reason: SettingsSetAsideReason) {
+        if viewMode == .settings {
+            viewMode = .home
+        } else if settingsSetAsideReasons.isEmpty {
+            return
+        }
+        settingsSetAsideReasons.insert(reason)
+    }
+
+    /// Ends `reason`'s hold on Settings. When it was the last one, Settings comes back if
+    /// `restoring` is `true`, and is dropped otherwise.
+    func endSettingsSetAside(for reason: SettingsSetAsideReason, restoring: Bool) {
+        guard settingsSetAsideReasons.remove(reason) != nil, settingsSetAsideReasons.isEmpty else { return }
+        if restoring { viewMode = .settings }
     }
 
     /// Clears the transient ``status``. Called on every show/toggle so a stale transient
